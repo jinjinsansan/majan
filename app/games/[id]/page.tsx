@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,12 +11,9 @@ import { ReasoningPanel } from '@/components/reasoning/ReasoningPanel';
 import { PlaybackControls } from '@/components/mahjong/PlaybackControls';
 import type { Game, Twin, Action, ReasoningLog } from '@/lib/types';
 
-interface PageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default function GamePage({ params }: PageProps) {
-  const { id } = use(params);
+export default function GamePage() {
+  const params = useParams();
+  const id = params.id as string;
   const [game, setGame] = useState<Game | null>(null);
   const [twins, setTwins] = useState<Twin[]>([]);
   const [actions, setActions] = useState<Action[]>([]);
