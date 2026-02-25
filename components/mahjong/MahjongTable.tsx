@@ -3,29 +3,32 @@
 import { useMemo } from 'react';
 import type { Twin, Action } from '@/lib/types';
 
-// 牌をテキスト表示用に変換（短い表示）
-function tileToShort(tile: string): { num: string; suit: string; isRed?: boolean } {
-  const suitChar = tile.slice(-1);
-  const num = tile.slice(0, -1);
+// 牌を表示用テキストに変換
+function tileToDisplay(tile: string): { text: string; isRed: boolean; isHonor: boolean } {
+  if (!tile || tile.length < 2) return { text: '?', isRed: false, isHonor: false };
   
+  const suitChar = tile.slice(-1);
+  const numStr = tile.slice(0, -1);
+  
+  // 字牌
   if (suitChar === 'z') {
     const honors: Record<string, string> = {
       '1': '東', '2': '南', '3': '西', '4': '北',
       '5': '白', '6': '發', '7': '中'
     };
-    return { num: honors[num] || '?', suit: '' };
+    return { text: honors[numStr] || '?', isRed: false, isHonor: true };
   }
   
-  const suitNames: Record<string, string> = {
-    'm': '萬', 'p': '筒', 's': '索'
-  };
+  // 数牌
+  const suitNames: Record<string, string> = { 'm': '萬', 'p': '筒', 's': '索' };
+  const suitName = suitNames[suitChar] || '?';
   
-  // 赤ドラ
-  if (num === '0') {
-    return { num: '5', suit: suitNames[suitChar]?.charAt(0) || '', isRed: true };
+  // 赤ドラ（0 = 赤5）
+  if (numStr === '0') {
+    return { text: '5' + suitName, isRed: true, isHonor: false };
   }
   
-  return { num, suit: suitNames[suitChar]?.charAt(0) || '' };
+  return { text: numStr + suitName, isRed: false, isHonor: false };
 }
 
 interface MahjongTableProps {
@@ -157,17 +160,16 @@ export function MahjongTable({ twins, actions, currentAction }: MahjongTableProp
                   <p className="text-sm text-muted-foreground mb-2">{player.score.toLocaleString()}点</p>
                   
                   {/* 手牌（公開手牌ルール） */}
-                  <div className="flex flex-wrap gap-1 max-w-[360px]">
+                  <div className="flex flex-wrap gap-1">
                     {player.hand.sort().map((tile, i) => {
-                      const t = tileToShort(tile);
+                      const t = tileToDisplay(tile);
                       return (
                         <div 
                           key={i} 
-                          className={`w-7 h-10 bg-amber-50 border border-amber-300 rounded shadow flex flex-col items-center justify-center ${t.isRed ? 'text-red-600' : 'text-gray-800'}`}
+                          className={`px-1 py-0.5 bg-amber-50 border border-amber-400 rounded shadow text-xs font-bold ${t.isRed ? 'text-red-600' : t.isHonor ? 'text-green-700' : 'text-gray-800'}`}
                           title={tile}
                         >
-                          <span className="text-sm font-bold leading-none">{t.num}</span>
-                          {t.suit && <span className="text-[10px] leading-none">{t.suit}</span>}
+                          {t.text}
                         </div>
                       );
                     })}
@@ -177,17 +179,16 @@ export function MahjongTable({ twins, actions, currentAction }: MahjongTableProp
 
               {/* 捨て牌 */}
               <div className={`absolute ${discardPositions[seat]}`}>
-                <div className="flex flex-wrap gap-0.5 max-w-[200px] justify-center">
+                <div className="flex flex-wrap gap-0.5 max-w-[180px] justify-center">
                   {player.discards.slice(-12).map((tile, i) => {
-                    const t = tileToShort(tile);
+                    const t = tileToDisplay(tile);
                     return (
                       <div 
                         key={i} 
-                        className={`w-5 h-7 bg-gray-100 border border-gray-300 rounded shadow-sm flex flex-col items-center justify-center ${t.isRed ? 'text-red-500' : 'text-gray-600'}`}
+                        className={`px-0.5 bg-gray-200 border border-gray-400 rounded text-[10px] font-bold ${t.isRed ? 'text-red-500' : 'text-gray-700'}`}
                         title={tile}
                       >
-                        <span className="text-xs font-bold leading-none">{t.num}</span>
-                        {t.suit && <span className="text-[8px] leading-none">{t.suit}</span>}
+                        {t.text}
                       </div>
                     );
                   })}
