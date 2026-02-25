@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { MahjongEngine } from '@/lib/mahjong-engine';
+import { MahjongEngine, tileToName } from '@/lib/mahjong-engine';
+import { decide } from '@/lib/llm';
 import type { Twin } from '@/lib/types';
+
+export const maxDuration = 60; // Vercel Pro: 60秒まで
 
 export async function POST(
   request: Request,
@@ -61,7 +64,7 @@ export async function POST(
   }
 }
 
-// 対局実行（超簡易版 - 配牌だけ表示）
+// 対局実行（LLM使用版）
 async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const engine = new MahjongEngine();
   let seqNo = 0;
@@ -95,7 +98,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       const player = initialState.players[seat];
       seqNo++;
       
-      const { error: actionError } = await supabase.from('actions').insert({
+      await supabase.from('actions').insert({
         game_id: gameId,
         hand_id: handId,
         seq_no: seqNo,
@@ -103,21 +106,25 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
         action_type: 'deal',
         payload_json: { tiles: player.hand },
       });
-
-      if (actionError) {
-        console.error('Action insert error:', actionError);
-      }
     }
 
-    // 簡易版: 8ターンだけ実行（LLMなし、ランダム打牌）
-    for (let turn = 0; turn < 8; turn++) {
+    // メインループ: 最大20ターン（Vercelタイムアウト対策）
+    const maxTurns = 20;
+    const useLLM = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
+
+    for (let turn = 0; turn < maxTurns; turn++) {
       const state = engine.getState();
       const currentSeat = state.currentActor;
+      const twin = twins[currentSeat];
 
       // ツモ
       if (state.phase === 'draw') {
         const drawnTile = engine.draw();
-        if (!drawnTile) break;
+        if (!drawnTile) {
+          // 流局
+          console.log('Ryuukyoku - no more tiles');
+          break;
+        }
 
         seqNo++;
         await supabase.from('actions').insert({
@@ -130,15 +137,65 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
         });
       }
 
-      // 打牌（ランダム）
+      // 打牌
       if (state.phase === 'discard') {
-        const player = state.players[currentSeat];
+        const updatedState = engine.getState();
+        const player = updatedState.players[currentSeat];
         const tiles = [...player.hand];
         if (player.tsumo) tiles.push(player.tsumo);
         
-        const randomTile = tiles[Math.floor(Math.random() * tiles.length)];
-        
-        engine.discard(randomTile);
+        let chosenTile: string;
+        let reasoning = {
+          summary: '',
+          detail: null as string | null,
+          structured: { risk: 'medium', mode: 'balance', candidates: [] as any[] },
+          tokensUsed: 0,
+          model: 'fallback',
+        };
+
+        if (useLLM && twin) {
+          // LLMで決定
+          try {
+            const allHands = updatedState.players.map(p => ({
+              hand: p.hand.map(t => tileToName(t)),
+              tsumo: p.tsumo ? tileToName(p.tsumo) : undefined,
+              riichi: p.riichi,
+            }));
+
+            const candidates = tiles.map(t => tileToName(t));
+
+            const decision = await decide(
+              twin,
+              { ...updatedState, round: '東1局', remainingTiles: updatedState.wall?.length || 0 },
+              candidates,
+              allHands,
+              process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
+            );
+
+            // 選択された牌を特定
+            chosenTile = tiles.find(t => tileToName(t) === decision.chosen) || tiles[0];
+            reasoning = {
+              summary: decision.summary,
+              detail: decision.detail,
+              structured: decision.structured,
+              tokensUsed: decision.tokensUsed,
+              model: decision.model,
+            };
+          } catch (llmError) {
+            console.error('LLM error, falling back to random:', llmError);
+            chosenTile = tiles[Math.floor(Math.random() * tiles.length)];
+            reasoning.summary = '（LLMエラー）ランダムに選択。';
+            reasoning.model = 'fallback';
+          }
+        } else {
+          // ランダム
+          chosenTile = tiles[Math.floor(Math.random() * tiles.length)];
+          reasoning.summary = `${twin?.name || '???'}が${tileToName(chosenTile)}を切った。`;
+          reasoning.model = 'random';
+        }
+
+        // 打牌実行
+        engine.discard(chosenTile);
         seqNo++;
 
         const { data: action } = await supabase
@@ -149,18 +206,20 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             seq_no: seqNo,
             actor_seat: currentSeat,
             action_type: 'discard',
-            payload_json: { tile: randomTile },
+            payload_json: { tile: chosenTile },
           })
           .select()
           .single();
 
-        // 簡易思考ログ
+        // 思考ログを保存
         if (action) {
           await supabase.from('reasoning_logs').insert({
             action_id: action.id,
-            summary_text: `${twins[currentSeat]?.name || '???'}が${randomTile}を切った。`,
-            structured_json: { risk: 'medium', mode: 'balance', candidates: [] },
-            model_name: 'random',
+            summary_text: reasoning.summary,
+            detail_text: reasoning.detail,
+            structured_json: reasoning.structured,
+            tokens_used: reasoning.tokensUsed,
+            model_name: reasoning.model,
           });
         }
 
@@ -168,7 +227,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       }
     }
 
-    // ゲーム終了（デモ）
+    // ゲーム終了
     await supabase
       .from('games')
       .update({ 
