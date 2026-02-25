@@ -13,6 +13,7 @@ interface PlayerSeatProps {
   discards: string[];
   melds: { type: string; tiles: string[] }[];
   riichi: boolean;
+  riichiDiscardIndex?: number;
   score: number;
   isCurrentActor: boolean;
   isLatestDiscard: boolean;
@@ -29,6 +30,7 @@ export function PlayerSeat({
   discards,
   melds,
   riichi,
+  riichiDiscardIndex,
   score,
   isCurrentActor,
   isLatestDiscard,
@@ -68,7 +70,12 @@ export function PlayerSeat({
               </span>
             )}
           </div>
-          <p className="text-sm text-muted-foreground mb-2">{score.toLocaleString()}点</p>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm text-muted-foreground">{score.toLocaleString()}点</span>
+            {riichi && (
+              <span className="text-xs text-red-400" title="リーチ棒 1000点">🀫</span>
+            )}
+          </div>
 
           {/* 副露 */}
           <MeldTiles melds={melds} />
@@ -83,6 +90,7 @@ export function PlayerSeat({
         <DiscardPile
           discards={discards}
           isLatestDiscard={isLatestDiscard}
+          riichiIndex={riichiDiscardIndex}
         />
       </div>
     </div>

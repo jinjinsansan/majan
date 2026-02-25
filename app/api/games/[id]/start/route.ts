@@ -84,6 +84,8 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const useLLM = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 55000; // 55秒でタイムアウト（5秒余裕）
+  let totalTokensUsed = 0;
+  const MAX_TOKENS_PER_GAME = 50000; // 1ゲームあたりのトークン上限
 
   try {
     // === 東風戦ループ（最大4局 + 親連荘） ===
@@ -237,6 +239,166 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           if (engine.canKyushukyuhai(currentSeat)) {
             // MVPではAIは九種九牌を宣言しない（続行）
           }
+
+          // === 暗槓チェック ===
+          if (engine.canAnkan(currentSeat)) {
+            const ankanCandidates = engine.getAnkanCandidates(currentSeat);
+            // 暗槓は基本的に有利なので自動実行
+            if (ankanCandidates.length > 0) {
+              const ankanTile = ankanCandidates[0];
+              const success = engine.executeAnkan(currentSeat, ankanTile);
+              if (success) {
+                seqNo++;
+                const kanMeld = engine.getState().players[currentSeat].melds.slice(-1)[0];
+                const { data: kanAction } = await supabase.from('actions').insert({
+                  game_id: gameId,
+                  hand_id: handId,
+                  seq_no: seqNo,
+                  actor_seat: currentSeat,
+                  action_type: 'kan',
+                  payload_json: {
+                    kan_type: 'ankan',
+                    tiles: kanMeld?.tiles || [],
+                  },
+                }).select().single();
+
+                if (kanAction) {
+                  await supabase.from('reasoning_logs').insert({
+                    action_id: kanAction.id,
+                    summary_text: `${twin?.name || '???'}が${tileToName(ankanTile)}を暗槓！`,
+                    detail_text: null,
+                    structured_json: {
+                      candidates: [],
+                      risk: 'low',
+                      mode: 'push',
+                      target_yaku: [],
+                      is_naki_decision: true,
+                    },
+                    tokens_used: 0,
+                    model_name: 'engine',
+                  });
+                }
+
+                // 嶺上ツモ後のツモ和了チェック
+                if (engine.canTsumo(currentSeat)) {
+                  const winResult = engine.executeTsumo(currentSeat);
+                  if (winResult) {
+                    seqNo++;
+                    const { data: tsumoAction } = await supabase.from('actions').insert({
+                      game_id: gameId,
+                      hand_id: handId,
+                      seq_no: seqNo,
+                      actor_seat: currentSeat,
+                      action_type: 'tsumo',
+                      payload_json: {
+                        tile: engine.getState().players[currentSeat].tsumo,
+                        yaku: winResult.yaku,
+                        han: winResult.han,
+                        fu: winResult.fu,
+                        score_level: winResult.scoreLevel,
+                        score_changes: winResult.scoreChanges,
+                        rinshan: true,
+                      },
+                    }).select().single();
+
+                    if (tsumoAction) {
+                      const yakuNames = winResult.yaku.map(([name, han]) => `${name}(${han}翻)`).join('・');
+                      await supabase.from('reasoning_logs').insert({
+                        action_id: tsumoAction.id,
+                        summary_text: `嶺上開花！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
+                        structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]) => name) },
+                        tokens_used: 0,
+                        model_name: 'engine',
+                      });
+                    }
+
+                    handResult = {
+                      type: 'agari',
+                      winResult,
+                      scoreChanges: winResult.scoreChanges,
+                      dealerRetains: winResult.winnerSeat === engine.getDealerSeat(),
+                    };
+                    handOver = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+
+          // === 加槓チェック ===
+          if (!handOver && engine.canKakan(currentSeat)) {
+            const kakanCandidates = engine.getKakanCandidates(currentSeat);
+            // 加槓も基本的に有利なので自動実行
+            if (kakanCandidates.length > 0) {
+              const kakanTile = kakanCandidates[0];
+              const success = engine.executeKakan(currentSeat, kakanTile);
+              if (success) {
+                seqNo++;
+                const kanMeld = engine.getState().players[currentSeat].melds.find(m => m.type === 'kakan');
+                const { data: kanAction } = await supabase.from('actions').insert({
+                  game_id: gameId,
+                  hand_id: handId,
+                  seq_no: seqNo,
+                  actor_seat: currentSeat,
+                  action_type: 'kan',
+                  payload_json: {
+                    kan_type: 'kakan',
+                    tile: kakanTile,
+                    tiles: kanMeld?.tiles || [],
+                  },
+                }).select().single();
+
+                if (kanAction) {
+                  await supabase.from('reasoning_logs').insert({
+                    action_id: kanAction.id,
+                    summary_text: `${twin?.name || '???'}が${tileToName(kakanTile)}を加槓！`,
+                    detail_text: null,
+                    structured_json: {
+                      candidates: [],
+                      risk: 'low',
+                      mode: 'push',
+                      target_yaku: [],
+                      is_naki_decision: true,
+                    },
+                    tokens_used: 0,
+                    model_name: 'engine',
+                  });
+                }
+
+                // 嶺上ツモ後のツモ和了チェック
+                if (engine.canTsumo(currentSeat)) {
+                  const winResult = engine.executeTsumo(currentSeat);
+                  if (winResult) {
+                    seqNo++;
+                    await supabase.from('actions').insert({
+                      game_id: gameId,
+                      hand_id: handId,
+                      seq_no: seqNo,
+                      actor_seat: currentSeat,
+                      action_type: 'tsumo',
+                      payload_json: {
+                        yaku: winResult.yaku,
+                        han: winResult.han,
+                        fu: winResult.fu,
+                        score_level: winResult.scoreLevel,
+                        score_changes: winResult.scoreChanges,
+                        rinshan: true,
+                      },
+                    });
+                    handResult = {
+                      type: 'agari',
+                      winResult,
+                      scoreChanges: winResult.scoreChanges,
+                      dealerRetains: winResult.winnerSeat === engine.getDealerSeat(),
+                    };
+                    handOver = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
         }
 
         // === 打牌フェーズ ===
@@ -263,7 +425,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           const canRiichi = engine.canRiichi(currentSeat);
           const riichiCandidates = canRiichi ? engine.getRiichiDiscardCandidates(currentSeat) : [];
 
-          if (useLLM && twin) {
+          if (useLLM && twin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
             try {
               const allHands = updatedState.players.map(p => ({
                 hand: p.hand.map(t => tileToName(t)),
@@ -289,6 +451,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                 process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
               );
 
+              totalTokensUsed += decision.tokensUsed;
               chosenTile = candidates.find(t => tileToName(t) === decision.chosen) || candidates[0];
               reasoning = {
                 summary: decision.summary,
@@ -407,18 +570,100 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             }
           }
 
-          // === ポン/チーチェック ===
+          // === 大明槓/ポン/チーチェック ===
           if (!handOver) {
             let called = false;
 
-            // ポンチェック（全プレイヤー）
-            const ponCandidates = engine.getPonCandidates(discardedTile, discarderSeat);
+            // 大明槓チェック（ポンより優先）
+            const daiminkanCandidates = engine.getDaiminkanCandidates(discardedTile, discarderSeat);
+            if (daiminkanCandidates.length > 0) {
+              for (const kanSeat of daiminkanCandidates) {
+                const kanTwin = orderedTwins[kanSeat];
+                // 大明槓の判断: naki_tendencyに基づく
+                const nakiTendency = kanTwin?.style_params?.naki_tendency ?? 50;
+                const shouldKan = Math.random() * 100 < nakiTendency;
+
+                if (shouldKan) {
+                  const success = engine.executeDaiminkan(kanSeat, discardedTile);
+                  if (success) {
+                    seqNo++;
+                    const kanMeld = engine.getState().players[kanSeat].melds.slice(-1)[0];
+                    const { data: kanAction } = await supabase.from('actions').insert({
+                      game_id: gameId,
+                      hand_id: handId,
+                      seq_no: seqNo,
+                      actor_seat: kanSeat,
+                      action_type: 'kan',
+                      payload_json: {
+                        kan_type: 'daiminkan',
+                        tile: discardedTile,
+                        tiles: kanMeld?.tiles || [],
+                        from_seat: discarderSeat,
+                      },
+                    }).select().single();
+
+                    if (kanAction) {
+                      await supabase.from('reasoning_logs').insert({
+                        action_id: kanAction.id,
+                        summary_text: `${kanTwin?.name || '???'}が${tileToName(discardedTile)}を大明槓！`,
+                        detail_text: null,
+                        structured_json: {
+                          candidates: [],
+                          risk: 'medium',
+                          mode: 'push',
+                          target_yaku: [],
+                          is_naki_decision: true,
+                        },
+                        tokens_used: 0,
+                        model_name: 'engine',
+                      });
+                    }
+
+                    // 嶺上ツモ後のツモ和了チェック
+                    if (engine.canTsumo(kanSeat)) {
+                      const winResult = engine.executeTsumo(kanSeat);
+                      if (winResult) {
+                        seqNo++;
+                        await supabase.from('actions').insert({
+                          game_id: gameId,
+                          hand_id: handId,
+                          seq_no: seqNo,
+                          actor_seat: kanSeat,
+                          action_type: 'tsumo',
+                          payload_json: {
+                            yaku: winResult.yaku,
+                            han: winResult.han,
+                            fu: winResult.fu,
+                            score_level: winResult.scoreLevel,
+                            score_changes: winResult.scoreChanges,
+                            rinshan: true,
+                          },
+                        });
+                        handResult = {
+                          type: 'agari',
+                          winResult,
+                          scoreChanges: winResult.scoreChanges,
+                          dealerRetains: winResult.winnerSeat === engine.getDealerSeat(),
+                        };
+                        handOver = true;
+                      }
+                    }
+
+                    called = true;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // ポンチェック（大明槓されなかった場合）
+            const ponCandidates = !called ? engine.getPonCandidates(discardedTile, discarderSeat) : [];
             if (ponCandidates.length > 0) {
               for (const ponSeat of ponCandidates) {
                 const ponTwin = orderedTwins[ponSeat];
                 let shouldPon = false;
 
-                if (useLLM && ponTwin) {
+                if (useLLM && ponTwin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
                   try {
                     const nakiDecision = await decideNaki(
                       ponTwin,
@@ -428,6 +673,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                       process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
                     );
                     shouldPon = nakiDecision.shouldCall;
+                    totalTokensUsed += 100; // 鳴き判断の概算トークン
                   } catch {
                     // NPC style_params based fallback
                     const nakiTendency = ponTwin.style_params?.naki_tendency ?? 50;
@@ -488,7 +734,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                 const chiTwin = orderedTwins[nextSeat];
                 let shouldChi = false;
 
-                if (useLLM && chiTwin) {
+                if (useLLM && chiTwin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
                   try {
                     const nakiDecision = await decideNaki(
                       chiTwin,
@@ -498,6 +744,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                       process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
                     );
                     shouldChi = nakiDecision.shouldCall;
+                    totalTokensUsed += 100; // 鳴き判断の概算トークン
                   } catch {
                     const nakiTendency = chiTwin.style_params?.naki_tendency ?? 50;
                     shouldChi = Math.random() * 100 < nakiTendency * 0.7; // チーはポンより控えめ
@@ -605,6 +852,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           tobi: true,
           open_hand: true,
           final_scores: finalState.players.map(p => p.score),
+          total_tokens_used: totalTokensUsed,
         },
       })
       .eq('id', gameId);

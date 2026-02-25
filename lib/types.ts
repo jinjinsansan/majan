@@ -97,6 +97,15 @@ export interface ActionPayload {
   tiles?: string[];       // 複数牌 (鳴き用)
   from_seat?: number;     // 鳴き元
   riichi_tile?: string;   // リーチ宣言牌
+  kan_type?: 'ankan' | 'kakan' | 'daiminkan'; // 槓の種類
+  rinshan?: boolean;      // 嶺上ツモかどうか
+  score_changes?: number[]; // 点数変動
+  yaku?: [string, number][]; // 役リスト
+  han?: number;           // 翻数
+  fu?: number;            // 符数
+  score_level?: string;   // 点数レベル
+  tenpai_seats?: number[]; // テンパイ席（流局時）
+  dora_indicators?: string[]; // ドラ表示牌（配牌時）
 }
 
 // Reasoning Log (思考ログ)

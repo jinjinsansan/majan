@@ -263,6 +263,10 @@ export class MahjongEngine {
   private turnCount: number = 0;
   private handFinished: boolean = false;
   private firstTurnFlags: boolean[] = [true, true, true, true]; // 各席の第一ツモフラグ
+  private rinshanTiles: string[] = [];
+  private pendingDoraIndicators: string[] = [];
+  private pendingUraDoraIndicators: string[] = [];
+  private kanCount: number = 0;
 
   constructor() {
     this.initPlayers();
@@ -297,12 +301,18 @@ export class MahjongEngine {
       this.players[i].tsumo = undefined;
     }
 
-    // 王牌（14枚: ドラ表示5枚 + 嶺上4枚 + 裏ドラ5枚）
-    this.deadWall = shuffled.splice(0, 14);
-    this.doraIndicators = [this.deadWall[0]];
-    this.uraDoraIndicators = [this.deadWall[7]];
+    // 王牌（14枚）
+    // [ドラ1][裏ドラ1][ドラ2][裏ドラ2][ドラ3][裏ドラ3][ドラ4][裏ドラ4][ドラ5][裏ドラ5][嶺上1][嶺上2][嶺上3][嶺上4]
+    const deadWallTiles = shuffled.splice(0, 14);
+    this.doraIndicators = [deadWallTiles[0]];
+    this.uraDoraIndicators = [deadWallTiles[1]];
+    this.pendingDoraIndicators = [deadWallTiles[2], deadWallTiles[4], deadWallTiles[6], deadWallTiles[8]];
+    this.pendingUraDoraIndicators = [deadWallTiles[3], deadWallTiles[5], deadWallTiles[7], deadWallTiles[9]];
+    this.rinshanTiles = [deadWallTiles[10], deadWallTiles[11], deadWallTiles[12], deadWallTiles[13]];
+    this.kanCount = 0;
 
     this.wall = shuffled;
+    this.deadWall = deadWallTiles;
     this.currentActor = this.dealerSeat;
     this.phase = 'draw';
     this.lastDiscard = null;
@@ -877,6 +887,241 @@ export class MahjongEngine {
     this.phase = 'discard';
     this.firstTurnFlags[seat] = false;
     return true;
+  }
+
+  // --------------------------------------------------------
+  // カン関連ヘルパー
+  // --------------------------------------------------------
+
+  /** 嶺上牌をツモる */
+  private drawRinshan(): string | null {
+    if (this.rinshanTiles.length === 0) return null;
+    return this.rinshanTiles.shift()!;
+  }
+
+  /** 新ドラを追加 */
+  private flipNewDora(): void {
+    if (this.pendingDoraIndicators.length > 0) {
+      this.doraIndicators.push(this.pendingDoraIndicators.shift()!);
+      this.uraDoraIndicators.push(this.pendingUraDoraIndicators.shift()!);
+    }
+  }
+
+  getKanCount(): number { return this.kanCount; }
+
+  // --------------------------------------------------------
+  // 暗槓 (Ankan) — 手牌に同じ牌が4枚
+  // --------------------------------------------------------
+
+  canAnkan(seat: number): boolean {
+    const player = this.players[seat];
+    if (player.riichi) return false; // MVP: リーチ中は暗槓不可
+    if (this.kanCount >= 4) return false;
+    if (this.rinshanTiles.length === 0) return false;
+    return this.getAnkanCandidates(seat).length > 0;
+  }
+
+  getAnkanCandidates(seat: number): string[] {
+    const player = this.players[seat];
+    const allTiles = [...player.hand];
+    if (player.tsumo) allTiles.push(player.tsumo);
+
+    const counts = new Map<string, number>();
+    for (const tile of allTiles) {
+      const norm = tile.startsWith('0') ? '5' + tile.slice(-1) : tile;
+      counts.set(norm, (counts.get(norm) || 0) + 1);
+    }
+
+    const candidates: string[] = [];
+    for (const [norm, count] of counts) {
+      if (count >= 4) candidates.push(norm);
+    }
+    return candidates;
+  }
+
+  executeAnkan(seat: number, tileNorm: string): boolean {
+    if (this.kanCount >= 4 || this.rinshanTiles.length === 0) return false;
+    const player = this.players[seat];
+
+    const allTiles = [...player.hand];
+    if (player.tsumo) allTiles.push(player.tsumo);
+
+    const meldTiles: string[] = [];
+    const remaining: string[] = [];
+
+    for (const tile of allTiles) {
+      const norm = tile.startsWith('0') ? '5' + tile.slice(-1) : tile;
+      if (norm === tileNorm && meldTiles.length < 4) {
+        meldTiles.push(tile);
+      } else {
+        remaining.push(tile);
+      }
+    }
+
+    if (meldTiles.length < 4) return false;
+
+    player.hand = remaining.sort(compareTiles);
+    player.tsumo = undefined;
+    player.melds.push({
+      type: 'ankan',
+      tiles: meldTiles,
+    });
+
+    this.kanCount++;
+    this.flipNewDora();
+
+    const rinshan = this.drawRinshan();
+    if (rinshan) {
+      player.tsumo = rinshan;
+      this.phase = 'discard';
+    }
+
+    return true;
+  }
+
+  // --------------------------------------------------------
+  // 加槓 (Kakan) — ポン済み面子に4枚目を追加
+  // --------------------------------------------------------
+
+  canKakan(seat: number): boolean {
+    const player = this.players[seat];
+    if (this.kanCount >= 4) return false;
+    if (this.rinshanTiles.length === 0) return false;
+    return this.getKakanCandidates(seat).length > 0;
+  }
+
+  getKakanCandidates(seat: number): string[] {
+    const player = this.players[seat];
+    const candidates: string[] = [];
+
+    const allTiles = [...player.hand];
+    if (player.tsumo) allTiles.push(player.tsumo);
+
+    for (const meld of player.melds) {
+      if (meld.type === 'pon') {
+        const ponNorm = meld.tiles[0].startsWith('0') ? '5' + meld.tiles[0].slice(-1) : meld.tiles[0];
+        for (const tile of allTiles) {
+          const tileNorm = tile.startsWith('0') ? '5' + tile.slice(-1) : tile;
+          if (tileNorm === ponNorm) {
+            candidates.push(tile);
+            break;
+          }
+        }
+      }
+    }
+    return candidates;
+  }
+
+  executeKakan(seat: number, tile: string): boolean {
+    if (this.kanCount >= 4 || this.rinshanTiles.length === 0) return false;
+    const player = this.players[seat];
+    const tileNorm = tile.startsWith('0') ? '5' + tile.slice(-1) : tile;
+
+    const meldIndex = player.melds.findIndex(m => {
+      if (m.type !== 'pon') return false;
+      const meldNorm = m.tiles[0].startsWith('0') ? '5' + m.tiles[0].slice(-1) : m.tiles[0];
+      return meldNorm === tileNorm;
+    });
+
+    if (meldIndex === -1) return false;
+
+    // 手牌/ツモから牌を取り出す
+    if (player.tsumo === tile) {
+      player.tsumo = undefined;
+    } else {
+      const idx = player.hand.indexOf(tile);
+      if (idx === -1) return false;
+      player.hand.splice(idx, 1);
+      if (player.tsumo) {
+        player.hand.push(player.tsumo);
+        player.tsumo = undefined;
+        player.hand.sort(compareTiles);
+      }
+    }
+
+    player.melds[meldIndex].type = 'kakan';
+    player.melds[meldIndex].tiles.push(tile);
+
+    this.kanCount++;
+    this.flipNewDora();
+
+    const rinshan = this.drawRinshan();
+    if (rinshan) {
+      player.tsumo = rinshan;
+      this.phase = 'discard';
+    }
+
+    return true;
+  }
+
+  // --------------------------------------------------------
+  // 大明槓 (Daiminkan) — 他家の捨て牌 + 手牌3枚
+  // --------------------------------------------------------
+
+  canDaiminkan(seat: number, tile: string): boolean {
+    if (seat === this.currentActor) return false;
+    const player = this.players[seat];
+    if (player.riichi) return false;
+    if (this.kanCount >= 4) return false;
+    if (this.rinshanTiles.length === 0) return false;
+    const count = player.hand.filter(t => tilesMatch(t, tile)).length;
+    return count >= 3;
+  }
+
+  executeDaiminkan(seat: number, tile: string): boolean {
+    if (!this.canDaiminkan(seat, tile)) return false;
+    const player = this.players[seat];
+    const fromSeat = this.lastDiscard!.seat;
+
+    const meldTiles: string[] = [tile];
+    let taken = 0;
+    const newHand: string[] = [];
+    for (const t of player.hand) {
+      if (taken < 3 && tilesMatch(t, tile)) {
+        meldTiles.push(t);
+        taken++;
+      } else {
+        newHand.push(t);
+      }
+    }
+
+    player.hand = newHand;
+    player.melds.push({
+      type: 'daiminkan',
+      tiles: meldTiles,
+      fromSeat,
+      calledTile: tile,
+    });
+
+    const discards = this.players[fromSeat].discards;
+    if (discards.length > 0 && discards[discards.length - 1] === tile) {
+      discards.pop();
+    }
+
+    this.currentActor = seat;
+    this.kanCount++;
+    this.flipNewDora();
+
+    const rinshan = this.drawRinshan();
+    if (rinshan) {
+      player.tsumo = rinshan;
+      this.phase = 'discard';
+    }
+
+    this.firstTurnFlags[seat] = false;
+    return true;
+  }
+
+  /** 大明槓可能なプレイヤー一覧 */
+  getDaiminkanCandidates(discardedTile: string, discarderSeat: number): number[] {
+    const candidates: number[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const seat = (discarderSeat + i) % 4;
+      if (this.canDaiminkan(seat, discardedTile)) {
+        candidates.push(seat);
+      }
+    }
+    return candidates;
   }
 
   // --------------------------------------------------------

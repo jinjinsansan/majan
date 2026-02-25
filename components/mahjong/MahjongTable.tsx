@@ -18,6 +18,7 @@ interface ReconstructedPlayer {
   discards: string[];
   melds: { type: string; tiles: string[] }[];
   riichi: boolean;
+  riichiDiscardIndex: number | undefined;
   score: number;
   tsumo?: string;
 }
@@ -25,10 +26,10 @@ interface ReconstructedPlayer {
 // アクションから現在の状態を再構築
 function reconstructState(actions: Action[]) {
   const players: ReconstructedPlayer[] = [
-    { hand: [], discards: [], melds: [], riichi: false, score: 25000, tsumo: undefined },
-    { hand: [], discards: [], melds: [], riichi: false, score: 25000, tsumo: undefined },
-    { hand: [], discards: [], melds: [], riichi: false, score: 25000, tsumo: undefined },
-    { hand: [], discards: [], melds: [], riichi: false, score: 25000, tsumo: undefined },
+    { hand: [], discards: [], melds: [], riichi: false, riichiDiscardIndex: undefined, score: 25000, tsumo: undefined },
+    { hand: [], discards: [], melds: [], riichi: false, riichiDiscardIndex: undefined, score: 25000, tsumo: undefined },
+    { hand: [], discards: [], melds: [], riichi: false, riichiDiscardIndex: undefined, score: 25000, tsumo: undefined },
+    { hand: [], discards: [], melds: [], riichi: false, riichiDiscardIndex: undefined, score: 25000, tsumo: undefined },
   ];
 
   let currentActor = 0;
@@ -55,6 +56,7 @@ function reconstructState(actions: Action[]) {
               players[i].discards = [];
               players[i].melds = [];
               players[i].riichi = false;
+              players[i].riichiDiscardIndex = undefined;
               players[i].tsumo = undefined;
             }
             remainingTiles = 70;
@@ -100,6 +102,8 @@ function reconstructState(actions: Action[]) {
 
       case 'riichi':
         players[seat].riichi = true;
+        // リーチ宣言牌は次の打牌のインデックス（現在の捨て牌数）
+        players[seat].riichiDiscardIndex = players[seat].discards.length;
         players[seat].score -= 1000;
         kyotaku++;
         break;
@@ -146,6 +150,58 @@ function reconstructState(actions: Action[]) {
           if (payload.from_seat !== undefined) {
             const fromDiscards = players[payload.from_seat].discards;
             if (fromDiscards.length > 0) fromDiscards.pop();
+          }
+        }
+        break;
+
+      case 'kan':
+        if (payload.kan_type === 'ankan') {
+          // 暗槓: 手牌から4枚取り出して副露に
+          if (payload.tiles) {
+            players[seat].melds.push({ type: 'ankan', tiles: payload.tiles });
+            for (const t of payload.tiles) {
+              const idx = players[seat].hand.indexOf(t);
+              if (idx >= 0) players[seat].hand.splice(idx, 1);
+            }
+            // ツモ牌からも除外
+            if (players[seat].tsumo && payload.tiles.includes(players[seat].tsumo!)) {
+              players[seat].tsumo = undefined;
+            }
+          }
+        } else if (payload.kan_type === 'kakan') {
+          // 加槓: 既存ポンに1枚追加
+          const ponMeldIdx = players[seat].melds.findIndex(
+            m => m.type === 'pon' && m.tiles.some(t => t.replace(/0/, '5') === (payload.tile || '').replace(/0/, '5'))
+          );
+          if (ponMeldIdx >= 0) {
+            players[seat].melds[ponMeldIdx] = {
+              type: 'kakan',
+              tiles: [...players[seat].melds[ponMeldIdx].tiles, payload.tile!],
+            };
+          }
+          // 手牌/ツモから除外
+          if (players[seat].tsumo === payload.tile) {
+            players[seat].tsumo = undefined;
+          } else {
+            const idx = players[seat].hand.indexOf(payload.tile!);
+            if (idx >= 0) players[seat].hand.splice(idx, 1);
+          }
+        } else if (payload.kan_type === 'daiminkan') {
+          // 大明槓: 他家の捨て牌+手牌3枚
+          if (payload.tiles) {
+            players[seat].melds.push({ type: 'kan', tiles: payload.tiles });
+            // 手牌から3枚除外（鳴いた牌除く）
+            const calledTile = payload.tile || payload.tiles[0];
+            const handTiles = payload.tiles.filter(t => t !== calledTile);
+            for (const t of handTiles) {
+              const idx = players[seat].hand.indexOf(t);
+              if (idx >= 0) players[seat].hand.splice(idx, 1);
+            }
+            // 捨て牌から除外
+            if (payload.from_seat !== undefined) {
+              const fromDiscards = players[payload.from_seat].discards;
+              if (fromDiscards.length > 0) fromDiscards.pop();
+            }
           }
         }
         break;
@@ -229,6 +285,7 @@ export function MahjongTable({ twins, actions, currentAction, highlightTiles = [
             discards={state.players[seat].discards}
             melds={state.players[seat].melds}
             riichi={state.players[seat].riichi}
+            riichiDiscardIndex={state.players[seat].riichiDiscardIndex}
             score={state.players[seat].score}
             isCurrentActor={state.currentActor === seat}
             isLatestDiscard={
@@ -257,6 +314,7 @@ export function MahjongTable({ twins, actions, currentAction, highlightTiles = [
             {currentAction.action_type === 'ron' && 'がロン！'}
             {currentAction.action_type === 'pon' && 'がポン！'}
             {currentAction.action_type === 'chi' && 'がチー！'}
+            {currentAction.action_type === 'kan' && `が${currentAction.payload_json?.kan_type === 'ankan' ? '暗槓' : currentAction.payload_json?.kan_type === 'kakan' ? '加槓' : '大明槓'}！`}
             {currentAction.action_type === 'ryukyoku' && '— 流局'}
           </span>
         </div>

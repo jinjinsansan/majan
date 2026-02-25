@@ -28,7 +28,7 @@ export default function GamePage() {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode | null>(null);
   const [highlightTiles, setHighlightTiles] = useState<string[]>([]);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null);
 
   // ゲームデータを読み込む
   const loadGame = useCallback(async () => {
@@ -86,56 +86,81 @@ export default function GamePage() {
     loadGame();
   }, [loadGame]);
 
-  // ポーリング（running中 & 続きから観戦モード）
+  // Supabase Realtime（running中 & 続きから観戦モード）
   useEffect(() => {
     if (game?.status === 'running' && viewMode === 'latest') {
-      pollRef.current = setInterval(async () => {
-        const supabase = createClient();
+      const supabase = createClient();
 
-        const { data: gameData } = await supabase
-          .from('games')
-          .select('status')
-          .eq('id', id)
-          .single();
+      // 既存チャネルをクリーンアップ
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
 
-        if (gameData) {
-          setGame(prev => prev ? { ...prev, status: gameData.status } : null);
-        }
+      const channel = supabase
+        .channel(`game-${id}`)
+        // アクション追加をリアルタイム受信
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'actions',
+            filter: `game_id=eq.${id}`,
+          },
+          async (payload) => {
+            const newAction = payload.new as Action;
+            setActions(prev => {
+              // 重複防止
+              if (prev.some(a => a.id === newAction.id)) return prev;
+              const updated = [...prev, newAction].sort((a, b) => a.seq_no - b.seq_no);
+              setCurrentActionIndex(updated.length - 1);
+              return updated;
+            });
 
-        const lastSeq = actions.length > 0 ? actions[actions.length - 1].seq_no : 0;
-        const { data: newActions } = await supabase
-          .from('actions')
-          .select('*')
-          .eq('game_id', id)
-          .gt('seq_no', lastSeq)
-          .order('seq_no', { ascending: true });
+            // 対応する思考ログを取得
+            const { data: reasoningData } = await supabase
+              .from('reasoning_logs')
+              .select('*')
+              .eq('action_id', newAction.id);
 
-        if (newActions && newActions.length > 0) {
-          const allActions = [...actions, ...newActions];
-          setActions(allActions);
-          setCurrentActionIndex(allActions.length - 1);
-
-          const { data: newReasonings } = await supabase
-            .from('reasoning_logs')
-            .select('*')
-            .in('action_id', newActions.map(a => a.id));
-
-          if (newReasonings) {
-            setReasonings(prev => [...prev, ...newReasonings]);
+            if (reasoningData && reasoningData.length > 0) {
+              setReasonings(prev => {
+                const existingIds = new Set(prev.map(r => r.id));
+                const newOnes = reasoningData.filter(r => !existingIds.has(r.id));
+                return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+              });
+            }
           }
-        }
+        )
+        // ゲームステータス変更をリアルタイム受信
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'games',
+            filter: `id=eq.${id}`,
+          },
+          async (payload) => {
+            const updated = payload.new as Game;
+            setGame(prev => prev ? { ...prev, ...updated } : null);
 
-        if (gameData?.status === 'finished' || gameData?.status === 'failed') {
-          if (pollRef.current) clearInterval(pollRef.current);
-          await loadGame();
-        }
-      }, 3000);
+            // ゲーム終了時にフルリロード
+            if (updated.status === 'finished' || updated.status === 'failed') {
+              await loadGame();
+            }
+          }
+        )
+        .subscribe();
+
+      channelRef.current = channel;
 
       return () => {
-        if (pollRef.current) clearInterval(pollRef.current);
+        supabase.removeChannel(channel);
+        channelRef.current = null;
       };
     }
-  }, [game?.status, viewMode, id, actions, loadGame]);
+  }, [game?.status, viewMode, id, loadGame]);
 
   // 自動再生
   useEffect(() => {

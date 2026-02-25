@@ -2,54 +2,74 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { createClient } from '@/lib/supabase/client';
 
-export default function LoginPage() {
-  const router = useRouter();
+export default function ResetPasswordPage() {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
     try {
-      const supabase = createClient();
-      
-      const { error: loginError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
       });
 
-      if (loginError) throw loginError;
+      const data = await res.json();
 
-      router.push('/dashboard');
-      router.refresh();
+      if (!res.ok) {
+        throw new Error(data.error || 'パスワードリセットに失敗しました');
+      }
+
+      setSuccess(true);
     } catch (err: any) {
-      setError(err.message || 'ログインに失敗しました');
+      setError(err.message || 'パスワードリセットに失敗しました');
     } finally {
       setLoading(false);
     }
   };
 
+  if (success) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl">📧 メールを送信しました</CardTitle>
+            <CardDescription>
+              {email} にパスワードリセットメールを送信しました。
+              メール内のリンクをクリックしてパスワードを再設定してください。
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className="justify-center">
+            <Link href="/login">
+              <Button variant="outline">ログインページへ</Button>
+            </Link>
+          </CardFooter>
+        </Card>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">ログイン</CardTitle>
+          <CardTitle className="text-2xl">パスワードリセット</CardTitle>
           <CardDescription>
-            麻雀AI Twinへようこそ
+            登録済みのメールアドレスを入力してください
           </CardDescription>
         </CardHeader>
-        <form onSubmit={handleLogin}>
+        <form onSubmit={handleReset}>
           <CardContent className="space-y-4">
             {error && (
               <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
@@ -67,32 +87,14 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">パスワード</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="パスワード"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
           </CardContent>
           <CardFooter className="flex flex-col gap-4">
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'ログイン中...' : 'ログイン'}
+              {loading ? '送信中...' : 'リセットメールを送信'}
             </Button>
-            <Link
-              href="/reset-password"
-              className="text-sm text-muted-foreground hover:text-primary hover:underline"
-            >
-              パスワードをお忘れですか？
-            </Link>
             <p className="text-sm text-muted-foreground">
-              アカウントをお持ちでないですか？{' '}
-              <Link href="/signup" className="text-primary hover:underline">
-                新規登録
+              <Link href="/login" className="text-primary hover:underline">
+                ログインに戻る
               </Link>
             </p>
           </CardFooter>

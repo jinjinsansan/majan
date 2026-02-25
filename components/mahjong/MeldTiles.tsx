@@ -14,6 +14,7 @@ export function MeldTiles({ melds }: MeldTilesProps) {
     chi: 'チー',
     kan: 'カン',
     ankan: '暗槓',
+    kakan: '加槓',
   };
 
   return (

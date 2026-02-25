@@ -73,7 +73,9 @@ ${candidates.map((c, i) => `${i + 1}. ${c}`).join('\n')}
   "detail": "詳細説明（重要局面の場合のみ、それ以外はnull）",
   "risk": "low|medium|high",
   "mode": "push|pull|balance",
-  "target_yaku": ["狙っている役"]
+  "target_yaku": ["狙っている役"],
+  "key_tiles": ["注目すべき危険牌・待ち牌"],
+  "is_oshihiki": false
 }`;
 
   return { system, user };
@@ -117,6 +119,9 @@ export async function decideWithOpenAI(
         risk: parsed.risk || 'medium',
         mode: parsed.mode || 'balance',
         target_yaku: parsed.target_yaku || [],
+        key_tiles: parsed.key_tiles || [],
+        is_riichi_decision: candidates.some(c => c.includes('リーチ')),
+        is_oshihiki: parsed.is_oshihiki || false,
       },
       tokensUsed: response.usage?.total_tokens || 0,
       model: 'gpt-4o-mini',
@@ -166,6 +171,9 @@ export async function decideWithAnthropic(
         risk: parsed.risk || 'medium',
         mode: parsed.mode || 'balance',
         target_yaku: parsed.target_yaku || [],
+        key_tiles: parsed.key_tiles || [],
+        is_riichi_decision: candidates.some(c => c.includes('リーチ')),
+        is_oshihiki: parsed.is_oshihiki || false,
       },
       tokensUsed: response.usage?.input_tokens + response.usage?.output_tokens || 0,
       model: 'claude-3-haiku',

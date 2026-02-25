@@ -58,6 +58,7 @@ export default function NewTwinPage() {
   const [nakiTendency, setNakiTendency] = useState('situational');
   const [freePrompt, setFreePrompt] = useState('');
   const [isPublic, setIsPublic] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   const togglePersonality = (id: string) => {
     setPersonalities(prev => 
@@ -339,6 +340,27 @@ ${freePrompt || '特になし'}
               <p className="text-xs text-muted-foreground text-right">
                 {freePrompt.length} / 3000
               </p>
+            </div>
+
+            {/* Persona Prompt Preview */}
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowPreview(prev => !prev)}
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showPreview ? '▼' : '▶'} プレビューを{showPreview ? '非表示' : '表示'}
+              </button>
+              {showPreview && (
+                <div className="bg-muted rounded-md p-4">
+                  <p className="text-xs text-muted-foreground mb-2">
+                    保存時に生成される persona_prompt:
+                  </p>
+                  <pre className="text-sm whitespace-pre-wrap break-words">
+                    {generatePersonaPrompt()}
+                  </pre>
+                </div>
+              )}
             </div>
 
             {/* Public Setting */}
