@@ -62,7 +62,12 @@ function reconstructState(actions: Action[]) {
 }
 
 export function MahjongTable({ twins, actions, currentAction }: MahjongTableProps) {
-  const state = useMemo(() => reconstructState(actions), [actions]);
+  const state = useMemo(() => {
+    console.log('Reconstructing state from', actions.length, 'actions');
+    const result = reconstructState(actions);
+    console.log('State:', result.players.map(p => p.hand.length));
+    return result;
+  }, [actions]);
   const seatNames = ['東', '南', '西', '北'];
   const seatColors = ['text-red-400', 'text-blue-400', 'text-green-400', 'text-yellow-400'];
 

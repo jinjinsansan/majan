@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -22,35 +22,81 @@ export default function GamePage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ゲームデータを読み込む
+  const loadGame = useCallback(async () => {
+    try {
+      const supabase = createClient();
+      
+      // ゲーム情報を取得
+      const { data: gameData, error: gameError } = await supabase
+        .from('games')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (gameError) throw gameError;
+      setGame(gameData);
+      console.log('Game loaded:', gameData);
+
+      // Twinsを取得
+      if (gameData.player_twin_ids) {
+        const { data: twinsData } = await supabase
+          .from('twins')
+          .select('*')
+          .in('id', gameData.player_twin_ids);
+        
+        // 席順に並べ替え
+        const orderedTwins = gameData.player_twin_ids.map((twinId: string) =>
+          twinsData?.find(t => t.id === twinId)
+        ).filter(Boolean);
+        setTwins(orderedTwins);
+        console.log('Twins loaded:', orderedTwins.length);
+      }
+
+      // アクションログを取得
+      const { data: actionsData, error: actionsError } = await supabase
+        .from('actions')
+        .select('*')
+        .eq('game_id', id)
+        .order('seq_no', { ascending: true });
+      
+      if (actionsError) {
+        console.error('Actions error:', actionsError);
+      }
+      
+      console.log('Actions loaded:', actionsData?.length || 0);
+      setActions(actionsData || []);
+
+      // 思考ログを取得
+      if (actionsData && actionsData.length > 0) {
+        const { data: reasoningsData } = await supabase
+          .from('reasoning_logs')
+          .select('*')
+          .in('action_id', actionsData.map(a => a.id));
+        
+        setReasonings(reasoningsData || []);
+        console.log('Reasonings loaded:', reasoningsData?.length || 0);
+
+        // 最新位置へ
+        setCurrentActionIndex(actionsData.length - 1);
+      }
+
+      return gameData;
+    } catch (err: any) {
+      console.error('Load game error:', err);
+      setError(err.message || 'ゲームの読み込みに失敗しました');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
 
   useEffect(() => {
     loadGame();
-    // Realtime subscription for live updates
-    const supabase = createClient();
-    const channel = supabase
-      .channel(`game:${id}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'actions',
-        filter: `game_id=eq.${id}`,
-      }, (payload) => {
-        setActions(prev => [...prev, payload.new as Action]);
-      })
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'reasoning_logs',
-      }, (payload) => {
-        setReasonings(prev => [...prev, payload.new as ReasoningLog]);
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [id]);
+  }, [loadGame]);
 
   // 自動再生
   useEffect(() => {
@@ -66,81 +112,43 @@ export default function GamePage() {
     return () => clearTimeout(timer);
   }, [isPlaying, currentActionIndex, actions.length, playbackSpeed]);
 
-  const loadGame = async () => {
-    try {
-      const supabase = createClient();
-      
-      // ゲーム情報を取得
-      const { data: gameData, error: gameError } = await supabase
-        .from('games')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (gameError) throw gameError;
-      setGame(gameData);
-
-      // Twinsを取得
-      if (gameData.player_twin_ids) {
-        const { data: twinsData } = await supabase
-          .from('twins')
-          .select('*')
-          .in('id', gameData.player_twin_ids);
-        
-        // 席順に並べ替え
-        const orderedTwins = gameData.player_twin_ids.map((twinId: string) =>
-          twinsData?.find(t => t.id === twinId)
-        ).filter(Boolean);
-        setTwins(orderedTwins);
-      }
-
-      // アクションログを取得
-      const { data: actionsData } = await supabase
-        .from('actions')
-        .select('*')
-        .eq('game_id', id)
-        .order('seq_no', { ascending: true });
-      
-      setActions(actionsData || []);
-
-      // 思考ログを取得
-      const { data: reasoningsData } = await supabase
-        .from('reasoning_logs')
-        .select('*')
-        .in('action_id', (actionsData || []).map(a => a.id));
-      
-      setReasonings(reasoningsData || []);
-
-      // 最新位置へ
-      if (actionsData && actionsData.length > 0) {
-        setCurrentActionIndex(actionsData.length - 1);
-      }
-    } catch (err: any) {
-      setError(err.message || 'ゲームの読み込みに失敗しました');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 対局開始（AI対局を実行）
+  // 対局開始
   const startGame = async () => {
+    setStarting(true);
+    setError(null);
+    
     try {
+      console.log('Starting game:', id);
+      
       const response = await fetch(`/api/games/${id}/start`, {
         method: 'POST',
       });
-      if (!response.ok) throw new Error('対局の開始に失敗しました');
       
-      // ゲーム状態を更新
-      const supabase = createClient();
-      await supabase
-        .from('games')
-        .update({ status: 'running', started_at: new Date().toISOString() })
-        .eq('id', id);
+      const result = await response.json();
+      console.log('Start result:', result);
       
-      setGame(prev => prev ? { ...prev, status: 'running' } : null);
+      if (!response.ok) {
+        throw new Error(result.error || '対局の開始に失敗しました');
+      }
+      
+      // 少し待ってからデータを再読み込み
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // データを再読み込み
+      await loadGame();
+      
     } catch (err: any) {
+      console.error('Start game error:', err);
       setError(err.message);
+    } finally {
+      setStarting(false);
     }
+  };
+
+  // 手動リロード
+  const reloadData = async () => {
+    setLoading(true);
+    await loadGame();
   };
 
   // 現在のアクションまでの思考ログを取得
@@ -190,9 +198,12 @@ export default function GamePage() {
                game.status === 'finished' ? '対局終了' : game.status}
             </h1>
           </div>
-          <div className="text-sm text-muted-foreground">
+          <div className="flex items-center gap-4">
+            <Button variant="outline" size="sm" onClick={reloadData}>
+              🔄 更新
+            </Button>
             {game.status === 'running' && (
-              <span className="inline-flex items-center gap-2">
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                 LIVE
               </span>
@@ -200,6 +211,11 @@ export default function GamePage() {
           </div>
         </div>
       </header>
+
+      {/* デバッグ情報 */}
+      <div className="bg-muted/50 px-4 py-2 text-xs text-muted-foreground">
+        Status: {game.status} | Actions: {actions.length} | Twins: {twins.length} | Index: {currentActionIndex}
+      </div>
 
       {/* メインコンテンツ */}
       <div className="flex-1 flex">
@@ -227,8 +243,13 @@ export default function GamePage() {
                     ⚠️ 公開手牌ルール
                   </div>
 
-                  <Button onClick={startGame} size="lg" className="w-full">
-                    🀄 対局開始
+                  <Button 
+                    onClick={startGame} 
+                    size="lg" 
+                    className="w-full"
+                    disabled={starting}
+                  >
+                    {starting ? '開始中...' : '🀄 対局開始'}
                   </Button>
                 </CardContent>
               </Card>
@@ -253,7 +274,7 @@ export default function GamePage() {
       </div>
 
       {/* 再生コントロール */}
-      {game.status !== 'queued' && (
+      {game.status !== 'queued' && actions.length > 0 && (
         <PlaybackControls
           currentIndex={currentActionIndex}
           totalActions={actions.length}
