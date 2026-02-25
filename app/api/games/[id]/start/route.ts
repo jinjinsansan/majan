@@ -108,8 +108,9 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       });
     }
 
-    // メインループ: 最大20ターン（Vercelタイムアウト対策）
-    const maxTurns = 20;
+    // メインループ: 最大70ターン（東風戦1局分）
+    // Vercel Proプランでは60秒まで実行可能
+    const maxTurns = 70;
     const useLLM = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
 
     for (let turn = 0; turn < maxTurns; turn++) {
