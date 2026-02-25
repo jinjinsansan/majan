@@ -87,6 +87,14 @@
   .discard-animation {
     animation: fadeIn 0.2s ease-out;
   }
+
+  .animate-fade-in {
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  .animate-overlay-in {
+    animation: overlayIn 0.3s ease-out;
+  }
 }
 
 @keyframes fadeIn {
@@ -97,5 +105,16 @@
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }

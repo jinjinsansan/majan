@@ -7,9 +7,10 @@ interface ReasoningPanelProps {
   twins: Twin[];
   reasonings: ReasoningLog[];
   actions: Action[];
+  onHighlight?: (tiles: string[]) => void;
 }
 
-export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelProps) {
+export function ReasoningPanel({ twins, reasonings, actions, onHighlight }: ReasoningPanelProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const seatNames = ['東', '南', '西', '北'];
   const seatColors = ['text-red-400', 'text-blue-400', 'text-green-400', 'text-yellow-400'];
@@ -29,7 +30,7 @@ export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelPro
     const reasoning = reasonings.find(r => r.action_id === action.id);
     const twin = twins[action.actor_seat];
     return { action, reasoning, twin };
-  }).filter(item => item.reasoning); // 思考ログがあるもののみ
+  }).filter(item => item.reasoning);
 
   if (logsWithContext.length === 0) {
     return (
@@ -54,20 +55,19 @@ export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelPro
         {logsWithContext.slice().reverse().map(({ action, reasoning, twin }) => {
           const isExpanded = expandedIds.has(reasoning!.id);
           const structured = reasoning!.structured_json;
-          
+
           return (
-            <div 
+            <div
               key={reasoning!.id}
-              className="bg-card rounded-lg border p-3"
+              className="bg-card rounded-lg border p-3 animate-fade-in"
             >
               {/* ヘッダー */}
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <span className={`text-sm font-semibold ${seatColors[action.actor_seat]}`}>
                   {seatNames[action.actor_seat]}
                 </span>
                 <span className="text-sm truncate">{twin?.name}</span>
-                
-                {/* リスク表示 */}
+
                 {structured?.risk && (
                   <span className={`text-xs px-1.5 py-0.5 rounded ${
                     structured.risk === 'high' ? 'bg-red-500/20 text-red-400' :
@@ -79,7 +79,6 @@ export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelPro
                   </span>
                 )}
 
-                {/* モード表示 */}
                 {structured?.mode && (
                   <span className={`text-xs px-1.5 py-0.5 rounded ${
                     structured.mode === 'push' ? 'bg-red-500/10 text-red-300' :
@@ -101,7 +100,7 @@ export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelPro
               {structured?.target_yaku && structured.target_yaku.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {structured.target_yaku.map((yaku, i) => (
-                    <span 
+                    <span
                       key={i}
                       className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded"
                     >
@@ -111,16 +110,34 @@ export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelPro
                 </div>
               )}
 
+              {/* 候補（クリックでハイライト） */}
+              {structured?.candidates && structured.candidates.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {structured.candidates.map((candidate, i) => (
+                    <button
+                      key={i}
+                      className="w-full text-left text-xs p-1.5 rounded bg-muted/50 hover:bg-muted transition-colors flex items-center gap-2"
+                      onClick={() => onHighlight?.([candidate.tile])}
+                    >
+                      <span className="font-bold text-primary bg-primary/10 px-1 rounded">
+                        {candidate.tile}
+                      </span>
+                      <span className="text-muted-foreground">{candidate.reason_short}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* 詳細（折りたたみ） */}
               {reasoning!.detail_text && (
                 <div className="mt-2">
                   <button
                     onClick={() => toggleExpand(reasoning!.id)}
-                    className="text-xs text-muted-foreground hover:text-foreground"
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >
                     {isExpanded ? '▼ 詳細を閉じる' : '▶ 詳細を見る'}
                   </button>
-                  
+
                   {isExpanded && (
                     <div className="mt-2 p-2 bg-muted/50 rounded text-xs leading-relaxed whitespace-pre-wrap">
                       {reasoning!.detail_text}
@@ -134,15 +151,11 @@ export function ReasoningPanel({ twins, reasonings, actions }: ReasoningPanelPro
                 {action.action_type === 'discard' && (
                   <span>→ {action.payload_json?.tile} を切る</span>
                 )}
-                {action.action_type === 'riichi' && (
-                  <span>→ リーチ宣言</span>
-                )}
-                {action.action_type === 'chi' && (
-                  <span>→ チー</span>
-                )}
-                {action.action_type === 'pon' && (
-                  <span>→ ポン</span>
-                )}
+                {action.action_type === 'tsumo' && <span>→ ツモ和了</span>}
+                {action.action_type === 'ron' && <span>→ ロン</span>}
+                {action.action_type === 'riichi' && <span>→ リーチ宣言</span>}
+                {action.action_type === 'pon' && <span>→ ポン</span>}
+                {action.action_type === 'chi' && <span>→ チー</span>}
               </div>
             </div>
           );
