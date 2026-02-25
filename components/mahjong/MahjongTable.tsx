@@ -3,29 +3,29 @@
 import { useMemo } from 'react';
 import type { Twin, Action } from '@/lib/types';
 
-// 牌をテキスト表示用に変換
-function tileToText(tile: string): string {
-  const suit = tile.slice(-1);
+// 牌をテキスト表示用に変換（短い表示）
+function tileToShort(tile: string): { num: string; suit: string; isRed?: boolean } {
+  const suitChar = tile.slice(-1);
   const num = tile.slice(0, -1);
   
-  if (suit === 'z') {
+  if (suitChar === 'z') {
     const honors: Record<string, string> = {
       '1': '東', '2': '南', '3': '西', '4': '北',
       '5': '白', '6': '發', '7': '中'
     };
-    return honors[num] || tile;
+    return { num: honors[num] || '?', suit: '' };
   }
   
-  const suitChars: Record<string, string> = {
+  const suitNames: Record<string, string> = {
     'm': '萬', 'p': '筒', 's': '索'
   };
   
-  // 赤ドラは赤い5として表示
+  // 赤ドラ
   if (num === '0') {
-    return '5' + suitChars[suit]?.charAt(0);
+    return { num: '5', suit: suitNames[suitChar]?.charAt(0) || '', isRed: true };
   }
   
-  return num + suitChars[suit]?.charAt(0);
+  return { num, suit: suitNames[suitChar]?.charAt(0) || '' };
 }
 
 interface MahjongTableProps {
@@ -157,16 +157,20 @@ export function MahjongTable({ twins, actions, currentAction }: MahjongTableProp
                   <p className="text-sm text-muted-foreground mb-2">{player.score.toLocaleString()}点</p>
                   
                   {/* 手牌（公開手牌ルール） */}
-                  <div className="flex flex-wrap gap-1 max-w-[320px]">
-                    {player.hand.sort().map((tile, i) => (
-                      <span 
-                        key={i} 
-                        className="inline-block w-7 h-10 bg-amber-50 border border-amber-200 rounded text-center leading-10 text-lg shadow-sm"
-                        title={tile}
-                      >
-                        {tileToText(tile)}
-                      </span>
-                    ))}
+                  <div className="flex flex-wrap gap-1 max-w-[360px]">
+                    {player.hand.sort().map((tile, i) => {
+                      const t = tileToShort(tile);
+                      return (
+                        <div 
+                          key={i} 
+                          className={`w-7 h-10 bg-amber-50 border border-amber-300 rounded shadow flex flex-col items-center justify-center ${t.isRed ? 'text-red-600' : 'text-gray-800'}`}
+                          title={tile}
+                        >
+                          <span className="text-sm font-bold leading-none">{t.num}</span>
+                          {t.suit && <span className="text-[10px] leading-none">{t.suit}</span>}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -174,15 +178,19 @@ export function MahjongTable({ twins, actions, currentAction }: MahjongTableProp
               {/* 捨て牌 */}
               <div className={`absolute ${discardPositions[seat]}`}>
                 <div className="flex flex-wrap gap-0.5 max-w-[200px] justify-center">
-                  {player.discards.slice(-12).map((tile, i) => (
-                    <span 
-                      key={i} 
-                      className="inline-block w-6 h-8 bg-gray-200 border border-gray-300 rounded text-center leading-8 text-xs shadow-sm text-gray-700"
-                      title={tile}
-                    >
-                      {tileToText(tile)}
-                    </span>
-                  ))}
+                  {player.discards.slice(-12).map((tile, i) => {
+                    const t = tileToShort(tile);
+                    return (
+                      <div 
+                        key={i} 
+                        className={`w-5 h-7 bg-gray-100 border border-gray-300 rounded shadow-sm flex flex-col items-center justify-center ${t.isRed ? 'text-red-500' : 'text-gray-600'}`}
+                        title={tile}
+                      >
+                        <span className="text-xs font-bold leading-none">{t.num}</span>
+                        {t.suit && <span className="text-[8px] leading-none">{t.suit}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

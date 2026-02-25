@@ -109,8 +109,8 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       }
     }
 
-    // 簡易版: 3ターンだけ実行（LLMなし、ランダム打牌）
-    for (let turn = 0; turn < 3; turn++) {
+    // 簡易版: 8ターンだけ実行（LLMなし、ランダム打牌）
+    for (let turn = 0; turn < 8; turn++) {
       const state = engine.getState();
       const currentSeat = state.currentActor;
 
