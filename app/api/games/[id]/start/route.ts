@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { MahjongEngine, tileToName } from '@/lib/mahjong-engine';
-import { decide } from '@/lib/llm';
+import { MahjongEngine } from '@/lib/mahjong-engine';
 import type { Twin } from '@/lib/types';
 
 export async function POST(
@@ -52,8 +51,8 @@ export async function POST(
       })
       .eq('id', gameId);
 
-    // 対局を実行（非同期で実行、すぐにレスポンスを返す）
-    runGame(gameId, orderedTwins, supabase);
+    // 対局を実行
+    await runGame(gameId, orderedTwins, supabase);
 
     return NextResponse.json({ success: true, gameId });
   } catch (error: any) {
@@ -62,15 +61,14 @@ export async function POST(
   }
 }
 
-// 対局実行（簡易版 - Vercel用に5ターンだけ実行）
+// 対局実行（超簡易版 - 配牌だけ表示）
 async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const engine = new MahjongEngine();
   let seqNo = 0;
-  let handId: string | null = null;
 
   try {
     // 最初の局を作成
-    const { data: hand } = await supabase
+    const { data: hand, error: handError } = await supabase
       .from('hands')
       .insert({
         game_id: gameId,
@@ -83,14 +81,21 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       .select()
       .single();
     
-    handId = hand?.id;
+    if (handError) {
+      console.error('Hand creation error:', handError);
+      throw handError;
+    }
+
+    const handId = hand.id;
 
     // 初期手牌をアクションとして記録
     const initialState = engine.getState();
+    
     for (let seat = 0; seat < 4; seat++) {
       const player = initialState.players[seat];
       seqNo++;
-      await supabase.from('actions').insert({
+      
+      const { error: actionError } = await supabase.from('actions').insert({
         game_id: gameId,
         hand_id: handId,
         seq_no: seqNo,
@@ -98,23 +103,21 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
         action_type: 'deal',
         payload_json: { tiles: player.hand },
       });
+
+      if (actionError) {
+        console.error('Action insert error:', actionError);
+      }
     }
 
-    // Vercelタイムアウト対策: 5ターンだけ実行
-    const maxTurns = 5;
-
-    for (let turn = 0; turn < maxTurns; turn++) {
+    // 簡易版: 3ターンだけ実行（LLMなし、ランダム打牌）
+    for (let turn = 0; turn < 3; turn++) {
       const state = engine.getState();
       const currentSeat = state.currentActor;
-      const twin = twins[currentSeat];
 
-      // ツモフェーズ
+      // ツモ
       if (state.phase === 'draw') {
         const drawnTile = engine.draw();
-        if (!drawnTile) {
-          // 流局
-          break;
-        }
+        if (!drawnTile) break;
 
         seqNo++;
         await supabase.from('actions').insert({
@@ -125,58 +128,17 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           action_type: 'draw',
           payload_json: { tile: drawnTile },
         });
-
-        // 少し待機（リアルタイム感）
-        await sleep(100);
       }
 
-      // 打牌フェーズ
+      // 打牌（ランダム）
       if (state.phase === 'discard') {
-        const legalActions = engine.getLegalActions(currentSeat);
-        const discardActions = legalActions.filter(a => a.type === 'discard');
+        const player = state.players[currentSeat];
+        const tiles = [...player.hand];
+        if (player.tsumo) tiles.push(player.tsumo);
         
-        if (discardActions.length === 0) continue;
-
-        // 候補手
-        const candidates = discardActions.map(a => 
-          a.type === 'discard' ? a.tile : ''
-        ).filter(Boolean);
-
-        // 全員の手牌（公開手牌ルール）
-        const allHands = state.players.map(p => ({
-          hand: p.hand.map(t => tileToName(t)),
-          tsumo: p.tsumo ? tileToName(p.tsumo) : undefined,
-          riichi: p.riichi,
-        }));
-
-        // LLMで決定
-        let decision;
-        try {
-          decision = await decide(
-            twin,
-            { ...state, round: '東1局', doraIndicators: state.doraIndicators },
-            candidates.map(c => tileToName(c)),
-            allHands
-          );
-        } catch (e) {
-          // フォールバック
-          decision = {
-            chosen: candidates[0],
-            summary: '手牌を整理する。',
-            detail: null,
-            structured: { risk: 'medium', mode: 'balance', candidates: [] },
-            tokensUsed: 0,
-            model: 'fallback',
-          };
-        }
-
-        // 選択された牌を特定
-        const chosenTile = candidates.find(c => 
-          tileToName(c) === decision.chosen
-        ) || candidates[0];
-
-        // 打牌実行
-        engine.discard(chosenTile);
+        const randomTile = tiles[Math.floor(Math.random() * tiles.length)];
+        
+        engine.discard(randomTile);
         seqNo++;
 
         const { data: action } = await supabase
@@ -187,32 +149,26 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             seq_no: seqNo,
             actor_seat: currentSeat,
             action_type: 'discard',
-            payload_json: { tile: chosenTile },
+            payload_json: { tile: randomTile },
           })
           .select()
           .single();
 
-        // 思考ログを保存
+        // 簡易思考ログ
         if (action) {
           await supabase.from('reasoning_logs').insert({
             action_id: action.id,
-            summary_text: decision.summary,
-            detail_text: decision.detail,
-            structured_json: decision.structured,
-            tokens_used: decision.tokensUsed,
-            model_name: decision.model,
+            summary_text: `${twins[currentSeat]?.name || '???'}が${randomTile}を切った。`,
+            structured_json: { risk: 'medium', mode: 'balance', candidates: [] },
+            model_name: 'random',
           });
         }
 
-        // 次のプレイヤーへ
         engine.nextTurn();
-
-        // 少し待機
-        await sleep(200);
       }
     }
 
-    // ゲーム終了
+    // ゲーム終了（デモ）
     await supabase
       .from('games')
       .update({ 
@@ -227,9 +183,6 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       .from('games')
       .update({ status: 'failed' })
       .eq('id', gameId);
+    throw error;
   }
-}
-
-function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
