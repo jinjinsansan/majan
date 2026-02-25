@@ -48,9 +48,9 @@ export async function POST(
     // ゲームステータスを更新
     await supabase
       .from('games')
-      .update({ 
-        status: 'running', 
-        started_at: new Date().toISOString() 
+      .update({
+        status: 'running',
+        started_at: new Date().toISOString(),
       })
       .eq('id', gameId);
 
@@ -60,180 +60,409 @@ export async function POST(
     return NextResponse.json({ success: true, gameId });
   } catch (error: any) {
     console.error('Start game error:', error);
+
+    // ゲームをfailedに更新
+    try {
+      const supabase = await createServiceClient();
+      await supabase
+        .from('games')
+        .update({ status: 'failed' })
+        .eq('id', gameId);
+    } catch {}
+
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-// 対局実行（LLM使用版）
+/**
+ * 対局実行メインループ
+ * 東風戦: 東1局〜東4局 (親連荘あり)
+ */
 async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const engine = new MahjongEngine();
   let seqNo = 0;
+  const useLLM = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 55000; // 55秒でタイムアウト（5秒余裕）
 
   try {
-    // 最初の局を作成
-    const { data: hand, error: handError } = await supabase
-      .from('hands')
-      .insert({
-        game_id: gameId,
-        hand_no: 1,
-        round: '東1局',
-        honba: 0,
-        kyotaku: 0,
-        dealer_seat: 0,
-      })
-      .select()
-      .single();
-    
-    if (handError) {
-      console.error('Hand creation error:', handError);
-      throw handError;
-    }
+    // === 東風戦ループ（最大4局 + 親連荘） ===
+    while (!engine.isGameOver()) {
+      // タイムアウトチェック
+      if (Date.now() - startTime > MAX_RUNTIME_MS) {
+        console.log('Timeout reached, finishing game');
+        break;
+      }
 
-    const handId = hand.id;
-
-    // 初期手牌をアクションとして記録
-    const initialState = engine.getState();
-    
-    for (let seat = 0; seat < 4; seat++) {
-      const player = initialState.players[seat];
-      seqNo++;
-      
-      await supabase.from('actions').insert({
-        game_id: gameId,
-        hand_id: handId,
-        seq_no: seqNo,
-        actor_seat: seat,
-        action_type: 'deal',
-        payload_json: { tiles: player.hand },
-      });
-    }
-
-    // メインループ: 最大70ターン（東風戦1局分）
-    // Vercel Proプランでは60秒まで実行可能
-    const maxTurns = 70;
-    const useLLM = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
-
-    for (let turn = 0; turn < maxTurns; turn++) {
       const state = engine.getState();
-      const currentSeat = state.currentActor;
-      const twin = twins[currentSeat];
 
-      // ツモ
-      if (state.phase === 'draw') {
-        const drawnTile = engine.draw();
-        if (!drawnTile) {
-          // 流局
-          console.log('Ryuukyoku - no more tiles');
-          break;
-        }
+      // 局レコードを作成
+      const { data: hand, error: handError } = await supabase
+        .from('hands')
+        .insert({
+          game_id: gameId,
+          hand_no: state.handNumber + 1,
+          round: state.round,
+          honba: state.honba,
+          kyotaku: state.kyotaku,
+          dealer_seat: state.dealerSeat,
+        })
+        .select()
+        .single();
 
+      if (handError) throw handError;
+      const handId = hand.id;
+
+      // 配牌をアクションとして記録
+      const initState = engine.getState();
+      for (let seat = 0; seat < 4; seat++) {
         seqNo++;
         await supabase.from('actions').insert({
           game_id: gameId,
           hand_id: handId,
           seq_no: seqNo,
-          actor_seat: currentSeat,
-          action_type: 'draw',
-          payload_json: { tile: drawnTile },
+          actor_seat: seat,
+          action_type: 'deal',
+          payload_json: {
+            tiles: initState.players[seat].hand,
+            dora_indicators: initState.doraIndicators,
+          },
         });
       }
 
-      // 打牌
-      if (state.phase === 'discard') {
-        const updatedState = engine.getState();
-        const player = updatedState.players[currentSeat];
-        const tiles = [...player.hand];
-        if (player.tsumo) tiles.push(player.tsumo);
-        
-        let chosenTile: string;
-        let reasoning = {
-          summary: '',
-          detail: null as string | null,
-          structured: { risk: 'medium', mode: 'balance', candidates: [] as any[] },
-          tokensUsed: 0,
-          model: 'fallback',
-        };
+      // === 局内ループ ===
+      let handOver = false;
+      let handResult: any = null;
 
-        if (useLLM && twin) {
-          // LLMで決定
-          try {
-            const allHands = updatedState.players.map(p => ({
-              hand: p.hand.map(t => tileToName(t)),
-              tsumo: p.tsumo ? tileToName(p.tsumo) : undefined,
-              riichi: p.riichi,
-            }));
-
-            const candidates = tiles.map(t => tileToName(t));
-
-            const decision = await decide(
-              twin,
-              { ...updatedState, round: '東1局', remainingTiles: updatedState.wall?.length || 0 },
-              candidates,
-              allHands,
-              process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
-            );
-
-            // 選択された牌を特定
-            chosenTile = tiles.find(t => tileToName(t) === decision.chosen) || tiles[0];
-            reasoning = {
-              summary: decision.summary,
-              detail: decision.detail,
-              structured: decision.structured,
-              tokensUsed: decision.tokensUsed,
-              model: decision.model,
-            };
-          } catch (llmError) {
-            console.error('LLM error, falling back to random:', llmError);
-            chosenTile = tiles[Math.floor(Math.random() * tiles.length)];
-            reasoning.summary = '（LLMエラー）ランダムに選択。';
-            reasoning.model = 'fallback';
-          }
-        } else {
-          // ランダム
-          chosenTile = tiles[Math.floor(Math.random() * tiles.length)];
-          reasoning.summary = `${twin?.name || '???'}が${tileToName(chosenTile)}を切った。`;
-          reasoning.model = 'random';
+      while (!handOver) {
+        // タイムアウトチェック
+        if (Date.now() - startTime > MAX_RUNTIME_MS) {
+          handOver = true;
+          break;
         }
 
-        // 打牌実行
-        engine.discard(chosenTile);
-        seqNo++;
+        const currentState = engine.getState();
+        const currentSeat = currentState.currentActor;
+        const twin = orderedTwins[currentSeat];
 
-        const { data: action } = await supabase
-          .from('actions')
-          .insert({
+        // === ツモフェーズ ===
+        if (currentState.phase === 'draw') {
+          // 流局チェック（山がない）
+          if (engine.isRyukyoku()) {
+            handResult = engine.processRyukyoku();
+            seqNo++;
+            await supabase.from('actions').insert({
+              game_id: gameId,
+              hand_id: handId,
+              seq_no: seqNo,
+              actor_seat: currentSeat,
+              action_type: 'ryukyoku',
+              payload_json: {
+                tenpai_seats: handResult.tenpaiSeats,
+                score_changes: handResult.scoreChanges,
+              },
+            });
+            handOver = true;
+            break;
+          }
+
+          const drawnTile = engine.draw();
+          if (!drawnTile) {
+            handResult = engine.processRyukyoku();
+            handOver = true;
+            break;
+          }
+
+          seqNo++;
+          await supabase.from('actions').insert({
+            game_id: gameId,
+            hand_id: handId,
+            seq_no: seqNo,
+            actor_seat: currentSeat,
+            action_type: 'draw',
+            payload_json: { tile: drawnTile },
+          });
+
+          // ツモ和了チェック
+          if (engine.canTsumo(currentSeat)) {
+            const winResult = engine.executeTsumo(currentSeat);
+            if (winResult) {
+              seqNo++;
+              const { data: action } = await supabase.from('actions').insert({
+                game_id: gameId,
+                hand_id: handId,
+                seq_no: seqNo,
+                actor_seat: currentSeat,
+                action_type: 'tsumo',
+                payload_json: {
+                  tile: drawnTile,
+                  yaku: winResult.yaku,
+                  han: winResult.han,
+                  fu: winResult.fu,
+                  score_level: winResult.scoreLevel,
+                  score_changes: winResult.scoreChanges,
+                },
+              }).select().single();
+
+              // 思考ログ（和了）
+              if (action) {
+                const yakuNames = winResult.yaku.map(([name, han]) => `${name}(${han}翻)`).join('・');
+                await supabase.from('reasoning_logs').insert({
+                  action_id: action.id,
+                  summary_text: `ツモ和了！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
+                  detail_text: `ツモ牌: ${tileToName(drawnTile)}\n役: ${yakuNames}\n${winResult.han}翻${winResult.fu}符\n${winResult.scoreLevel}`,
+                  structured_json: {
+                    candidates: [],
+                    risk: 'low',
+                    mode: 'push',
+                    target_yaku: winResult.yaku.map(([name]) => name),
+                  },
+                  tokens_used: 0,
+                  model_name: 'engine',
+                });
+              }
+
+              handResult = {
+                type: 'agari',
+                winResult,
+                scoreChanges: winResult.scoreChanges,
+                dealerRetains: winResult.winnerSeat === engine.getDealerSeat(),
+              };
+              handOver = true;
+              break;
+            }
+          }
+
+          // 九種九牌チェック
+          if (engine.canKyushukyuhai(currentSeat)) {
+            // MVPではAIは九種九牌を宣言しない（続行）
+          }
+        }
+
+        // === 打牌フェーズ ===
+        if (engine.getState().phase === 'discard') {
+          const updatedState = engine.getState();
+          const player = updatedState.players[currentSeat];
+          const candidates = engine.getDiscardCandidates(currentSeat);
+
+          let chosenTile: string;
+          let reasoning = {
+            summary: '',
+            detail: null as string | null,
+            structured: {
+              risk: 'medium' as const,
+              mode: 'balance' as const,
+              candidates: [] as any[],
+              target_yaku: [] as string[],
+            },
+            tokensUsed: 0,
+            model: 'fallback',
+          };
+
+          // リーチ判定
+          const canRiichi = engine.canRiichi(currentSeat);
+          const riichiCandidates = canRiichi ? engine.getRiichiDiscardCandidates(currentSeat) : [];
+
+          if (useLLM && twin) {
+            try {
+              const allHands = updatedState.players.map(p => ({
+                hand: p.hand.map(t => tileToName(t)),
+                tsumo: p.tsumo ? tileToName(p.tsumo) : undefined,
+                riichi: p.riichi,
+                melds: p.melds.map(m => ({
+                  type: m.type,
+                  tiles: m.tiles.map(t => tileToName(t)),
+                })),
+              }));
+
+              const candidateNames = candidates.map(t => tileToName(t));
+
+              const decision = await decide(
+                twin,
+                {
+                  ...updatedState,
+                  round: updatedState.round,
+                  remainingTiles: updatedState.remainingTiles,
+                },
+                candidateNames,
+                allHands,
+                process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
+              );
+
+              chosenTile = candidates.find(t => tileToName(t) === decision.chosen) || candidates[0];
+              reasoning = {
+                summary: decision.summary,
+                detail: decision.detail,
+                structured: decision.structured as any,
+                tokensUsed: decision.tokensUsed,
+                model: decision.model,
+              };
+            } catch (llmError) {
+              console.error('LLM error:', llmError);
+              chosenTile = candidates[Math.floor(Math.random() * candidates.length)];
+              reasoning.summary = `${twin?.name || '???'}が${tileToName(chosenTile)}を切った。`;
+              reasoning.model = 'fallback';
+            }
+          } else {
+            chosenTile = candidates[Math.floor(Math.random() * candidates.length)];
+            reasoning.summary = `${twin?.name || '???'}が${tileToName(chosenTile)}を切った。`;
+            reasoning.model = 'random';
+          }
+
+          // リーチ実行（テンパイかつリーチ可能な牌を切る場合）
+          let isRiichi = false;
+          if (canRiichi && riichiCandidates.some(rc => rc === chosenTile)) {
+            engine.executeRiichi(currentSeat, chosenTile);
+            isRiichi = true;
+
+            seqNo++;
+            await supabase.from('actions').insert({
+              game_id: gameId,
+              hand_id: handId,
+              seq_no: seqNo,
+              actor_seat: currentSeat,
+              action_type: 'riichi',
+              payload_json: { tile: chosenTile },
+            });
+          } else {
+            engine.discard(chosenTile);
+          }
+
+          // 打牌アクション記録
+          seqNo++;
+          const { data: action } = await supabase.from('actions').insert({
             game_id: gameId,
             hand_id: handId,
             seq_no: seqNo,
             actor_seat: currentSeat,
             action_type: 'discard',
             payload_json: { tile: chosenTile },
-          })
-          .select()
-          .single();
+          }).select().single();
 
-        // 思考ログを保存
-        if (action) {
-          await supabase.from('reasoning_logs').insert({
-            action_id: action.id,
-            summary_text: reasoning.summary,
-            detail_text: reasoning.detail,
-            structured_json: reasoning.structured,
-            tokens_used: reasoning.tokensUsed,
-            model_name: reasoning.model,
-          });
+          // 思考ログ保存
+          if (action) {
+            await supabase.from('reasoning_logs').insert({
+              action_id: action.id,
+              summary_text: reasoning.summary || `${tileToName(chosenTile)}を切る。`,
+              detail_text: reasoning.detail,
+              structured_json: reasoning.structured,
+              tokens_used: reasoning.tokensUsed,
+              model_name: reasoning.model,
+            });
+          }
+
+          // === 鳴き・ロンチェック ===
+          const discardedTile = chosenTile;
+          const discarderSeat = currentSeat;
+
+          // ロンチェック（頭ハネ: 打牌者の下家から順）
+          const ronCandidates = engine.getRonCandidates(discardedTile, discarderSeat);
+          if (ronCandidates.length > 0) {
+            const ronSeat = ronCandidates[0]; // 頭ハネ
+            const winResult = engine.executeRon(ronSeat);
+            if (winResult) {
+              seqNo++;
+              const { data: ronAction } = await supabase.from('actions').insert({
+                game_id: gameId,
+                hand_id: handId,
+                seq_no: seqNo,
+                actor_seat: ronSeat,
+                action_type: 'ron',
+                payload_json: {
+                  tile: discardedTile,
+                  from_seat: discarderSeat,
+                  yaku: winResult.yaku,
+                  han: winResult.han,
+                  fu: winResult.fu,
+                  score_level: winResult.scoreLevel,
+                  score_changes: winResult.scoreChanges,
+                },
+              }).select().single();
+
+              if (ronAction) {
+                const yakuNames = winResult.yaku.map(([name, han]) => `${name}(${han}翻)`).join('・');
+                await supabase.from('reasoning_logs').insert({
+                  action_id: ronAction.id,
+                  summary_text: `ロン！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
+                  detail_text: `ロン牌: ${tileToName(discardedTile)} (${twins[discarderSeat]?.name}から)\n役: ${yakuNames}\n${winResult.han}翻${winResult.fu}符`,
+                  structured_json: {
+                    candidates: [],
+                    risk: 'low',
+                    mode: 'push',
+                    target_yaku: winResult.yaku.map(([name]) => name),
+                  },
+                  tokens_used: 0,
+                  model_name: 'engine',
+                });
+              }
+
+              handResult = {
+                type: 'agari',
+                winResult,
+                scoreChanges: winResult.scoreChanges,
+                dealerRetains: winResult.winnerSeat === engine.getDealerSeat(),
+              };
+              handOver = true;
+              break;
+            }
+          }
+
+          // ポンチェック（MVPではAIは基本的にパス — 鳴きはPhase1で本格実装）
+          // TODO: LLMに鳴き判断させる
+
+          // 次のターンへ
+          if (!handOver) {
+            engine.nextTurn();
+          }
         }
+      }
 
-        engine.nextTurn();
+      // 局結果を保存
+      if (handResult) {
+        await supabase
+          .from('hands')
+          .update({
+            result_json: {
+              type: handResult.type,
+              winner_seat: handResult.winResult?.winnerSeat,
+              loser_seat: handResult.winResult?.loserSeat,
+              yaku: handResult.winResult?.yaku?.map(([name]: [string, number]) => name),
+              han: handResult.winResult?.han,
+              fu: handResult.winResult?.fu,
+              score_changes: handResult.scoreChanges,
+            },
+          })
+          .eq('id', handId);
+
+        // 次の局へ
+        const dealerRetains = handResult.dealerRetains ?? false;
+        if (!engine.advanceToNextHand(dealerRetains)) {
+          break; // ゲーム終了
+        }
+      } else {
+        // タイムアウトなどで局が未完了
+        break;
       }
     }
 
     // ゲーム終了
+    const finalState = engine.getState();
     await supabase
       .from('games')
-      .update({ 
-        status: 'finished', 
-        finished_at: new Date().toISOString() 
+      .update({
+        status: 'finished',
+        finished_at: new Date().toISOString(),
+        rule_set: {
+          players: 4,
+          format: 'tonpu',
+          aka_dora: true,
+          kuitan: true,
+          atozuke: true,
+          double_ron: false,
+          tobi: true,
+          open_hand: true,
+          final_scores: finalState.players.map(p => p.score),
+        },
       })
       .eq('id', gameId);
 

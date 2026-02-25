@@ -140,8 +140,8 @@ ${freePrompt || '特になし'}
       return;
     }
     
-    if (freePrompt.length < 50) {
-      setError('自由プロンプトは50文字以上入力してください');
+    if (freePrompt.length < 500) {
+      setError('自由プロンプトは500文字以上入力してください');
       return;
     }
 
@@ -324,7 +324,7 @@ ${freePrompt || '特になし'}
             {/* Free Prompt */}
             <div className="space-y-2">
               <Label htmlFor="freePrompt">
-                自由プロンプト * <span className="text-muted-foreground text-xs">(50〜3000文字)</span>
+                自由プロンプト * <span className="text-muted-foreground text-xs">(500〜3000文字)</span>
               </Label>
               <Textarea
                 id="freePrompt"
@@ -332,7 +332,7 @@ ${freePrompt || '特になし'}
                 value={freePrompt}
                 onChange={(e) => setFreePrompt(e.target.value)}
                 rows={6}
-                minLength={50}
+                minLength={500}
                 maxLength={3000}
                 required
               />

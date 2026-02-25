@@ -223,11 +223,6 @@ export default function GamePage() {
         </div>
       </header>
 
-      {/* デバッグ情報 */}
-      <div className="bg-muted/50 px-4 py-2 text-xs text-muted-foreground">
-        Status: {game.status} | Actions: {actions.length} | Twins: {twins.length} | Index: {currentActionIndex}
-      </div>
-
       {/* メインコンテンツ */}
       <div className="flex-1 flex">
         {/* 卓ビュー */}
@@ -291,6 +286,7 @@ export default function GamePage() {
           totalActions={actions.length}
           isPlaying={isPlaying}
           playbackSpeed={playbackSpeed}
+          actions={actions}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
           onPrev={() => setCurrentActionIndex(prev => Math.max(0, prev - 1))}

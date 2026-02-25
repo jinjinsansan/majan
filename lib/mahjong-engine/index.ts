@@ -1,24 +1,109 @@
 /**
- * 麻雀エンジンラッパー
- * @pai-forge/riichi-mahjong をベースに、
- * 公開手牌ルール用にカスタマイズ
+ * 麻雀エンジン — @pai-forge/riichi-mahjong 統合版
+ * 仕様書 Section 3 準拠: 4人麻雀・東風戦・赤ドラあり・喰いタンあり・頭ハネ
  */
 
-// 牌の定義
+import {
+  calculateShanten,
+  getUkeire,
+  detectYaku,
+  calculateScoreForTehai,
+  assertTehai13,
+  assertTehai14,
+  getDoraNext,
+  HaiKind,
+  NoYakuError,
+  isMenzen,
+} from '@pai-forge/riichi-mahjong';
+import type {
+  HaiKindId,
+  Tehai,
+  Tehai13,
+  Tehai14,
+  DetectYakuConfig,
+  ScoreCalculationConfig,
+  ScoreResult,
+  Payment,
+  Kazehai,
+  CompletedMentsu,
+  Furo,
+} from '@pai-forge/riichi-mahjong';
+
+// ============================================================
+// Part 1: 牌の型定義・定数
+// ============================================================
+
 export type TileSuit = 'm' | 'p' | 's' | 'z';
-export type Tile = `${1|2|3|4|5|6|7|8|9}${TileSuit}` | `${1|2|3|4|5|6|7}z`;
 
-// 全ての牌（136枚、赤ドラ含む）
-export const ALL_TILES: string[] = [];
+/** 副露の型 */
+export interface Meld {
+  type: 'chi' | 'pon' | 'daiminkan' | 'kakan' | 'ankan';
+  tiles: string[];
+  fromSeat?: number;
+  calledTile?: string;
+}
+
+/** プレイヤー状態 */
+export interface PlayerState {
+  seat: number;
+  hand: string[];
+  melds: Meld[];
+  discards: string[];
+  riichi: boolean;
+  riichiTurn?: number;
+  score: number;
+  tsumo?: string;
+}
+
+/** 和了結果 */
+export interface WinResult {
+  type: 'tsumo' | 'ron';
+  winnerSeat: number;
+  loserSeat?: number;
+  yaku: [string, number][];
+  han: number;
+  fu: number;
+  scoreLevel: string;
+  payment: Payment;
+  totalPoints: number;
+  scoreChanges: [number, number, number, number];
+}
+
+/** 局の結果 */
+export interface HandResult {
+  type: 'agari' | 'ryukyoku';
+  winResult?: WinResult;
+  tenpaiSeats?: number[];
+  scoreChanges: [number, number, number, number];
+  dealerRetains: boolean;
+}
+
+/** ゲーム全体の状態（外部公開用） */
+export interface GameState {
+  round: string;
+  handNumber: number;
+  honba: number;
+  kyotaku: number;
+  dealerSeat: number;
+  currentTurn: number;
+  currentActor: number;
+  players: PlayerState[];
+  doraIndicators: string[];
+  remainingTiles: number;
+  isHandFinished: boolean;
+  isGameFinished: boolean;
+  phase: 'draw' | 'discard' | 'call' | 'finished';
+  lastDiscard: { tile: string; seat: number } | null;
+}
+
+// 全牌136枚（赤ドラ含む）
+const ALL_TILES: string[] = [];
 const suits: TileSuit[] = ['m', 'p', 's'];
-const honors = ['1z', '2z', '3z', '4z', '5z', '6z', '7z']; // 東南西北白発中
+const honors = ['1z', '2z', '3z', '4z', '5z', '6z', '7z'];
 
-// 数牌を生成
 suits.forEach(suit => {
   for (let num = 1; num <= 9; num++) {
-    // 通常牌は各4枚
     for (let i = 0; i < 4; i++) {
-      // 5の牌は1枚を赤ドラにする（index 0）
       if (num === 5 && i === 0) {
         ALL_TILES.push(`0${suit}`); // 赤5
       } else {
@@ -27,341 +112,1005 @@ suits.forEach(suit => {
     }
   }
 });
-
-// 字牌を生成（各4枚）
 honors.forEach(tile => {
-  for (let i = 0; i < 4; i++) {
-    ALL_TILES.push(tile);
-  }
+  for (let i = 0; i < 4; i++) ALL_TILES.push(tile);
 });
 
-// 副露（鳴き）の型
-export interface Meld {
-  type: 'chi' | 'pon' | 'kan' | 'ankan';
-  tiles: string[];
-  fromSeat?: number; // 鳴き元
-  calledTile?: string; // 鳴いた牌
+// ============================================================
+// Part 2: 牌変換ユーティリティ
+// ============================================================
+
+/** 文字列牌 → HaiKindId (0-33) */
+export function tileToKindId(tile: string): HaiKindId {
+  const suit = tile.slice(-1);
+  let num = parseInt(tile.slice(0, -1));
+  if (num === 0) num = 5; // 赤5 → 5
+
+  let kindId: number;
+  switch (suit) {
+    case 'm': kindId = num - 1; break;       // 0-8
+    case 'p': kindId = num - 1 + 9; break;   // 9-17
+    case 's': kindId = num - 1 + 18; break;  // 18-26
+    case 'z': kindId = num - 1 + 27; break;  // 27-33
+    default: kindId = 0;
+  }
+  return kindId as HaiKindId;
 }
 
-// プレイヤーの手牌状態
-export interface PlayerState {
-  seat: number;
-  hand: string[]; // 手牌（13枚）
-  melds: Meld[]; // 副露
-  discards: string[]; // 捨て牌
-  riichi: boolean;
-  riichiTurn?: number;
-  score: number;
-  tsumo?: string; // ツモ牌
+/** HaiKindId → 文字列牌（赤なし） */
+export function kindIdToTile(kindId: number): string {
+  if (kindId <= 8) return `${kindId + 1}m`;
+  if (kindId <= 17) return `${kindId - 8}p`;
+  if (kindId <= 26) return `${kindId - 17}s`;
+  return `${kindId - 26}z`;
 }
 
-// ゲーム状態
-export interface GameState {
-  round: string; // '東1局' etc
-  honba: number;
-  kyotaku: number; // 供託
-  dealerSeat: number;
-  currentTurn: number;
-  currentActor: number;
-  players: PlayerState[];
-  wall: string[]; // 山
-  doraIndicators: string[];
-  uraDoraIndicators: string[];
-  remainingTiles: number;
-  isFinished: boolean;
-  phase: 'draw' | 'discard' | 'call' | 'finished';
+/** 席 → 自風の HaiKindId */
+function seatToKaze(seat: number, dealerSeat: number): Kazehai {
+  const winds = [HaiKind.Ton, HaiKind.Nan, HaiKind.Sha, HaiKind.Pei];
+  return winds[(seat - dealerSeat + 4) % 4] as Kazehai;
 }
 
-// アクションの型
-export type ActionType = 
-  | { type: 'draw' }
-  | { type: 'discard'; tile: string }
-  | { type: 'chi'; tiles: string[]; discard: string }
-  | { type: 'pon'; tiles: string[]; discard: string }
-  | { type: 'kan'; tiles: string[]; kanType: 'daiminkan' | 'kakan' | 'ankan' }
-  | { type: 'riichi'; tile: string }
-  | { type: 'tsumo' }
-  | { type: 'ron' }
-  | { type: 'pass' }
-  | { type: 'kyushukyuhai' }; // 九種九牌
+/** 手牌をTehai用のHaiKindId配列に変換 */
+function handToKindIds(tiles: string[]): HaiKindId[] {
+  return tiles.map(t => tileToKindId(t));
+}
 
-// 麻雀エンジンクラス
+/** Meld → ライブラリ用 CompletedMentsu */
+function meldToLibMentsu(meld: Meld): CompletedMentsu {
+  const hais = meld.tiles.map(t => tileToKindId(t)) as any;
+  const from = meld.fromSeat !== undefined ? ((meld.fromSeat % 3) + 1) : 1;
+
+  if (meld.type === 'chi') {
+    return {
+      type: 'Shuntsu' as const,
+      hais: hais.slice(0, 3),
+      furo: { type: 'Chi' as const, from } as Furo,
+    } as any;
+  }
+  if (meld.type === 'pon') {
+    return {
+      type: 'Koutsu' as const,
+      hais: hais.slice(0, 3),
+      furo: { type: 'Pon' as const, from } as Furo,
+    } as any;
+  }
+  // daiminkan, kakan
+  if (meld.type === 'daiminkan' || meld.type === 'kakan') {
+    return {
+      type: 'Kantsu' as const,
+      hais: hais.slice(0, 4),
+      furo: { type: meld.type === 'daiminkan' ? 'Daiminkan' : 'Kakan', from } as any as Furo,
+    } as any;
+  }
+  // ankan — no furo
+  return {
+    type: 'Kantsu' as const,
+    hais: hais.slice(0, 4),
+  } as any;
+}
+
+/** 赤ドラ枚数を数える */
+function countRedDora(tiles: string[]): number {
+  return tiles.filter(t => t.startsWith('0')).length;
+}
+
+// ============================================================
+// Part 3: ヘルパー関数
+// ============================================================
+
+function shuffle<T>(array: T[]): T[] {
+  const result = [...array];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function compareTiles(a: string, b: string): number {
+  const suitOrder: Record<string, number> = { m: 0, p: 1, s: 2, z: 3 };
+  const suitA = a.slice(-1);
+  const suitB = b.slice(-1);
+  const numA = parseInt(a.slice(0, -1)) || 0;
+  const numB = parseInt(b.slice(0, -1)) || 0;
+  if (suitA !== suitB) return suitOrder[suitA] - suitOrder[suitB];
+  return numA - numB;
+}
+
+/** 牌の一致判定（赤ドラ考慮: 0m == 5m） */
+function tilesMatch(a: string, b: string): boolean {
+  const normA = a.startsWith('0') ? '5' + a.slice(-1) : a;
+  const normB = b.startsWith('0') ? '5' + b.slice(-1) : b;
+  return normA === normB;
+}
+
+/** 九種九牌チェック: 配牌+最初のツモで么九牌が9種以上 */
+function isKyushukyuhai(hand: string[], tsumo: string): boolean {
+  const all = [...hand, tsumo];
+  const yaochuSet = new Set<string>();
+  for (const tile of all) {
+    const suit = tile.slice(-1);
+    const num = parseInt(tile.slice(0, -1));
+    const isYaochu = suit === 'z' || num === 1 || num === 9 || num === 0; // 0=赤5, not yaochu
+    if (suit === 'z') yaochuSet.add(tile);
+    else if (num === 1 || num === 9) yaochuSet.add(`${num}${suit}`);
+  }
+  return yaochuSet.size >= 9;
+}
+
+// ============================================================
+// Part 4: MahjongEngine クラス
+// ============================================================
+
 export class MahjongEngine {
-  private state: GameState;
-  
+  // ゲーム全体の状態
+  private handNumber: number = 0;   // 0=東1局, 1=東2局, 2=東3局, 3=東4局
+  private honba: number = 0;
+  private kyotaku: number = 0;
+  private dealerSeat: number = 0;
+  private gameFinished: boolean = false;
+
+  // 局内の状態
+  private wall: string[] = [];
+  private deadWall: string[] = [];
+  private players: PlayerState[] = [];
+  private currentActor: number = 0;
+  private phase: 'draw' | 'discard' | 'call' | 'finished' = 'draw';
+  private doraIndicators: string[] = [];
+  private uraDoraIndicators: string[] = [];
+  private lastDiscard: { tile: string; seat: number } | null = null;
+  private turnCount: number = 0;
+  private handFinished: boolean = false;
+  private firstTurnFlags: boolean[] = [true, true, true, true]; // 各席の第一ツモフラグ
+
   constructor() {
-    this.state = this.initGame();
+    this.initPlayers();
+    this.startNewHand();
   }
 
-  // ゲーム初期化
-  private initGame(): GameState {
-    const shuffledTiles = this.shuffle([...ALL_TILES]);
-    
-    // 配牌
-    const players: PlayerState[] = [];
+  private initPlayers(): void {
+    this.players = Array.from({ length: 4 }, (_, i) => ({
+      seat: i,
+      hand: [],
+      melds: [],
+      discards: [],
+      riichi: false,
+      score: 25000,
+      tsumo: undefined,
+    }));
+  }
+
+  // --------------------------------------------------------
+  // 局の開始
+  // --------------------------------------------------------
+  startNewHand(): void {
+    const shuffled = shuffle([...ALL_TILES]);
+
+    // 各プレイヤーに13枚配牌
     for (let i = 0; i < 4; i++) {
-      const hand = shuffledTiles.splice(0, 13).sort(this.compareTiles);
-      players.push({
-        seat: i,
-        hand,
-        melds: [],
-        discards: [],
-        riichi: false,
-        score: 25000,
-      });
+      this.players[i].hand = shuffled.splice(0, 13).sort(compareTiles);
+      this.players[i].melds = [];
+      this.players[i].discards = [];
+      this.players[i].riichi = false;
+      this.players[i].riichiTurn = undefined;
+      this.players[i].tsumo = undefined;
     }
-    
-    // 王牌（14枚）
-    const deadWall = shuffledTiles.splice(0, 14);
-    const doraIndicators = [deadWall[0]];
-    
+
+    // 王牌（14枚: ドラ表示5枚 + 嶺上4枚 + 裏ドラ5枚）
+    this.deadWall = shuffled.splice(0, 14);
+    this.doraIndicators = [this.deadWall[0]];
+    this.uraDoraIndicators = [this.deadWall[7]];
+
+    this.wall = shuffled;
+    this.currentActor = this.dealerSeat;
+    this.phase = 'draw';
+    this.lastDiscard = null;
+    this.turnCount = 0;
+    this.handFinished = false;
+    this.firstTurnFlags = [true, true, true, true];
+  }
+
+  // --------------------------------------------------------
+  // 状態取得
+  // --------------------------------------------------------
+  getState(): GameState {
     return {
-      round: '東1局',
-      honba: 0,
-      kyotaku: 0,
-      dealerSeat: 0,
-      currentTurn: 0,
-      currentActor: 0,
-      players,
-      wall: shuffledTiles,
-      doraIndicators,
-      uraDoraIndicators: [deadWall[5]],
-      remainingTiles: shuffledTiles.length,
-      isFinished: false,
-      phase: 'draw',
+      round: `東${this.handNumber + 1}局`,
+      handNumber: this.handNumber,
+      honba: this.honba,
+      kyotaku: this.kyotaku,
+      dealerSeat: this.dealerSeat,
+      currentTurn: this.turnCount,
+      currentActor: this.currentActor,
+      players: this.players.map(p => ({
+        ...p,
+        hand: [...p.hand],
+        melds: p.melds.map(m => ({ ...m, tiles: [...m.tiles] })),
+        discards: [...p.discards],
+      })),
+      doraIndicators: [...this.doraIndicators],
+      remainingTiles: this.wall.length,
+      isHandFinished: this.handFinished,
+      isGameFinished: this.gameFinished,
+      phase: this.phase,
+      lastDiscard: this.lastDiscard ? { ...this.lastDiscard } : null,
     };
   }
 
-  // 牌の比較関数（ソート用）
-  private compareTiles(a: string, b: string): number {
-    const suitOrder: Record<string, number> = { m: 0, p: 1, s: 2, z: 3 };
-    const suitA = a.slice(-1);
-    const suitB = b.slice(-1);
-    const numA = parseInt(a.slice(0, -1)) || 0;
-    const numB = parseInt(b.slice(0, -1)) || 0;
-    
-    if (suitA !== suitB) {
-      return suitOrder[suitA] - suitOrder[suitB];
-    }
-    return numA - numB;
+  getRoundString(): string {
+    return `東${this.handNumber + 1}局`;
   }
 
-  // 配列シャッフル
-  private shuffle<T>(array: T[]): T[] {
-    const result = [...array];
-    for (let i = result.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [result[i], result[j]] = [result[j], result[i]];
-    }
-    return result;
-  }
+  getHonba(): number { return this.honba; }
+  getKyotaku(): number { return this.kyotaku; }
+  getDealerSeat(): number { return this.dealerSeat; }
+  isHandOver(): boolean { return this.handFinished; }
+  isGameOver(): boolean { return this.gameFinished; }
+  getHandNumber(): number { return this.handNumber; }
 
-  // 現在の状態を取得
-  getState(): GameState {
-    return JSON.parse(JSON.stringify(this.state));
-  }
-
-  // ツモ
+  // --------------------------------------------------------
+  // ツモ（牌を引く）
+  // --------------------------------------------------------
   draw(): string | null {
-    if (this.state.wall.length === 0) {
-      return null;
-    }
-    const tile = this.state.wall.shift()!;
-    this.state.players[this.state.currentActor].tsumo = tile;
-    this.state.remainingTiles = this.state.wall.length;
-    this.state.phase = 'discard';
+    if (this.wall.length === 0) return null;
+    const tile = this.wall.shift()!;
+    this.players[this.currentActor].tsumo = tile;
+    this.phase = 'discard';
     return tile;
   }
 
+  // --------------------------------------------------------
   // 打牌
+  // --------------------------------------------------------
   discard(tile: string): boolean {
-    const player = this.state.players[this.state.currentActor];
-    
-    // ツモ牌を捨てる場合
+    const player = this.players[this.currentActor];
+
     if (player.tsumo === tile) {
+      // ツモ切り
       player.discards.push(tile);
       player.tsumo = undefined;
     } else {
-      // 手牌から捨てる場合
-      const idx = player.hand.indexOf(tile);
-      if (idx === -1) return false;
-      
-      if (player.tsumo) {
-        player.hand.push(player.tsumo);
-        player.tsumo = undefined;
+      // 手出し
+      const idx = player.hand.findIndex(t => t === tile);
+      if (idx === -1) {
+        // 赤ドラ考慮で再検索
+        const idxMatch = player.hand.findIndex(t => tilesMatch(t, tile));
+        if (idxMatch === -1) return false;
+        const actualTile = player.hand[idxMatch];
+        if (player.tsumo) {
+          player.hand.push(player.tsumo);
+          player.tsumo = undefined;
+        }
+        player.hand.splice(idxMatch, 1);
+        player.hand.sort(compareTiles);
+        player.discards.push(actualTile);
+      } else {
+        if (player.tsumo) {
+          player.hand.push(player.tsumo);
+          player.tsumo = undefined;
+        }
+        player.hand.splice(idx, 1);
+        player.hand.sort(compareTiles);
+        player.discards.push(tile);
       }
-      player.hand.splice(idx, 1);
-      player.hand.sort(this.compareTiles);
-      player.discards.push(tile);
     }
-    
-    this.state.phase = 'call';
+
+    this.lastDiscard = { tile, seat: this.currentActor };
+    this.phase = 'call';
+    this.firstTurnFlags[this.currentActor] = false;
     return true;
   }
 
-  // 鳴き判定後、次のプレイヤーへ
+  // --------------------------------------------------------
+  // 次のプレイヤーへ
+  // --------------------------------------------------------
   nextTurn(): void {
-    this.state.currentActor = (this.state.currentActor + 1) % 4;
-    this.state.currentTurn++;
-    this.state.phase = 'draw';
+    this.currentActor = (this.currentActor + 1) % 4;
+    this.turnCount++;
+    this.phase = 'draw';
   }
 
-  // 合法手を取得
-  getLegalActions(seat: number): ActionType[] {
-    const actions: ActionType[] = [];
-    const player = this.state.players[seat];
-    
-    if (this.state.phase === 'draw' && seat === this.state.currentActor) {
-      actions.push({ type: 'draw' });
-    }
-    
-    if (this.state.phase === 'discard' && seat === this.state.currentActor) {
-      // 打牌可能な牌
-      const tiles = new Set<string>();
-      player.hand.forEach(t => tiles.add(t));
-      if (player.tsumo) tiles.add(player.tsumo);
-      
-      tiles.forEach(tile => {
-        actions.push({ type: 'discard', tile });
-      });
-      
-      // リーチ判定（簡易）
-      if (!player.riichi && player.melds.length === 0 && this.canRiichi(seat)) {
-        tiles.forEach(tile => {
-          actions.push({ type: 'riichi', tile });
-        });
-      }
-      
-      // ツモ和了判定
-      if (this.canTsumo(seat)) {
-        actions.push({ type: 'tsumo' });
-      }
-    }
-    
-    if (this.state.phase === 'call' && seat !== this.state.currentActor) {
-      const lastDiscard = this.getLastDiscard();
-      if (lastDiscard) {
-        // ポン判定
-        if (this.canPon(seat, lastDiscard)) {
-          actions.push({ type: 'pon', tiles: [lastDiscard, lastDiscard, lastDiscard], discard: '' });
-        }
-        // チー判定（上家からのみ）
-        if ((this.state.currentActor + 1) % 4 === seat) {
-          const chiOptions = this.getChiOptions(seat, lastDiscard);
-          chiOptions.forEach(tiles => {
-            actions.push({ type: 'chi', tiles, discard: '' });
-          });
-        }
-        // ロン判定
-        if (this.canRon(seat, lastDiscard)) {
-          actions.push({ type: 'ron' });
-        }
-      }
-      actions.push({ type: 'pass' });
-    }
-    
-    return actions;
+  // --------------------------------------------------------
+  // 和了判定 — @pai-forge/riichi-mahjong 使用
+  // --------------------------------------------------------
+
+  /** ツモ和了可能か */
+  canTsumo(seat: number): boolean {
+    const player = this.players[seat];
+    if (!player.tsumo) return false;
+    return this.checkWin(seat, player.tsumo, true);
   }
 
-  // 最後の捨て牌を取得
-  getLastDiscard(): string | null {
-    const discards = this.state.players[this.state.currentActor].discards;
-    return discards.length > 0 ? discards[discards.length - 1] : null;
+  /** ロン可能か（フリテンチェック含む） */
+  canRon(seat: number, tile: string): boolean {
+    const player = this.players[seat];
+    // フリテンチェック: 自分の捨て牌に待ち牌がある場合はロン不可
+    if (this.isFuriten(seat)) return false;
+    // リーチ後のフリテン: 一度見逃した牌と同じ種類はロン不可
+    return this.checkWin(seat, tile, false);
   }
 
-  // ポン可能判定
-  private canPon(seat: number, tile: string): boolean {
-    const hand = this.state.players[seat].hand;
-    const count = hand.filter(t => this.tilesMatch(t, tile)).length;
+  /** 内部: 和了判定 */
+  private checkWin(seat: number, agariTile: string, isTsumo: boolean): boolean {
+    const player = this.players[seat];
+
+    try {
+      // 手牌(13枚) + 和了牌 → 14枚
+      const closedKindIds = handToKindIds(player.hand);
+      const agariKindId = tileToKindId(agariTile);
+      const allClosed = [...closedKindIds, agariKindId];
+
+      const exposedMentsu = player.melds.map(m => meldToLibMentsu(m));
+
+      const tehai = { closed: allClosed, exposed: exposedMentsu } as unknown as Tehai14;
+
+      // assertTehai14 でバリデーション（14枚チェック）
+      try {
+        assertTehai14(tehai);
+      } catch {
+        return false; // 枚数不正
+      }
+
+      const config: DetectYakuConfig = {
+        agariHai: agariKindId,
+        bakaze: HaiKind.Ton as Kazehai, // 東風戦は常に東
+        jikaze: seatToKaze(seat, this.dealerSeat),
+        doraMarkers: this.doraIndicators.map(t => tileToKindId(t)),
+        isTsumo,
+      };
+
+      const yakuResult = detectYaku(tehai, config);
+      return yakuResult.length > 0;
+    } catch (e: any) {
+      if (e?.constructor?.name === 'NoYakuError' || e?.message?.includes('yaku')) {
+        // 和了形だが役なし → リーチなら立直が役になる
+        return this.players[seat].riichi;
+      }
+      // 和了形ではない
+      return false;
+    }
+  }
+
+  // --------------------------------------------------------
+  // 点数計算
+  // --------------------------------------------------------
+  calculateWin(seat: number, isTsumo: boolean, agariTile: string): WinResult | null {
+    const player = this.players[seat];
+
+    try {
+      const closedKindIds = handToKindIds(player.hand);
+      const agariKindId = tileToKindId(agariTile);
+      const allClosed = [...closedKindIds, agariKindId];
+      const exposedMentsu = player.melds.map(m => meldToLibMentsu(m));
+      const tehai = { closed: allClosed, exposed: exposedMentsu } as unknown as Tehai14;
+
+      try {
+        assertTehai14(tehai);
+      } catch {
+        return null;
+      }
+
+      const config: ScoreCalculationConfig = {
+        agariHai: agariKindId,
+        isTsumo,
+        jikaze: seatToKaze(seat, this.dealerSeat),
+        bakaze: HaiKind.Ton as Kazehai,
+        doraMarkers: this.doraIndicators.map(t => tileToKindId(t)),
+        uraDoraMarkers: player.riichi
+          ? this.uraDoraIndicators.map(t => tileToKindId(t))
+          : [],
+      };
+
+      const scoreResult = calculateScoreForTehai(tehai, config);
+
+      // ライブラリの結果から役名リストを取得
+      const yakuList: [string, number][] = scoreResult.detail?.yakuResult
+        ? scoreResult.detail.yakuResult.map(([name, han]) => [name, han as number])
+        : [];
+
+      // リーチ加算
+      let extraHan = 0;
+      if (player.riichi) {
+        yakuList.push(['Riichi', 1]);
+        extraHan += 1;
+      }
+
+      // 赤ドラ加算
+      const allTiles = [...player.hand, agariTile, ...player.melds.flatMap(m => m.tiles)];
+      const redDora = countRedDora(allTiles);
+      if (redDora > 0) {
+        yakuList.push(['赤ドラ', redDora]);
+        extraHan += redDora;
+      }
+
+      // 最終的な翻数
+      const totalHan = scoreResult.han + extraHan;
+      const fu = scoreResult.fu;
+
+      // 支払い計算（追加翻がある場合は自前で再計算）
+      let payment = scoreResult.payment;
+      let totalPoints: number;
+
+      if (extraHan > 0) {
+        // 簡易再計算
+        const isDealer = seat === this.dealerSeat;
+        totalPoints = calculatePaymentFromHanFu(totalHan, fu, isDealer, isTsumo);
+        payment = buildPayment(totalPoints, isDealer, isTsumo);
+      } else {
+        totalPoints = getPaymentTotal(payment);
+      }
+
+      // 本場加算
+      totalPoints += this.honba * 300;
+
+      // 供託取得
+      totalPoints += this.kyotaku * 1000;
+
+      // 点数移動を計算
+      const scoreChanges: [number, number, number, number] = [0, 0, 0, 0];
+      scoreChanges[seat] = totalPoints;
+
+      if (isTsumo) {
+        const isDealer = seat === this.dealerSeat;
+        if (isDealer) {
+          // 親ツモ: 子3人が均等払い
+          const perChild = Math.ceil(totalPoints / 3 / 100) * 100;
+          for (let i = 0; i < 4; i++) {
+            if (i !== seat) scoreChanges[i] = -perChild;
+          }
+          scoreChanges[seat] = perChild * 3;
+        } else {
+          // 子ツモ: 親は高め、子は低め
+          const base = calculatePaymentFromHanFu(totalHan, fu, false, true);
+          const childPay = Math.ceil(base / 4 / 100) * 100;
+          const dealerPay = Math.ceil(base / 2 / 100) * 100;
+          for (let i = 0; i < 4; i++) {
+            if (i === seat) continue;
+            scoreChanges[i] = i === this.dealerSeat ? -(dealerPay + this.honba * 100) : -(childPay + this.honba * 100);
+          }
+          scoreChanges[seat] = -scoreChanges.filter((_, i) => i !== seat).reduce((a, b) => a + b, 0);
+        }
+      } else {
+        // ロン: 振り込み者が全額払い
+        const loserSeat = this.lastDiscard!.seat;
+        const ronBase = calculatePaymentFromHanFu(totalHan, fu, seat === this.dealerSeat, false);
+        const ronTotal = ronBase + this.honba * 300 + this.kyotaku * 1000;
+        scoreChanges[loserSeat] = -ronBase - this.honba * 300;
+        scoreChanges[seat] = ronTotal;
+      }
+
+      return {
+        type: isTsumo ? 'tsumo' : 'ron',
+        winnerSeat: seat,
+        loserSeat: isTsumo ? undefined : this.lastDiscard?.seat,
+        yaku: yakuList,
+        han: totalHan,
+        fu,
+        scoreLevel: scoreResult.scoreLevel,
+        payment,
+        totalPoints,
+        scoreChanges,
+      };
+    } catch (e: any) {
+      // NoYakuError でもリーチ役で和了
+      if (player.riichi && (e?.constructor?.name === 'NoYakuError' || e?.message?.includes('yaku'))) {
+        return this.buildRiichiOnlyWin(seat, isTsumo, agariTile);
+      }
+      console.error('Score calculation error:', e);
+      return null;
+    }
+  }
+
+  /** リーチのみの和了（構造役なし） */
+  private buildRiichiOnlyWin(seat: number, isTsumo: boolean, agariTile: string): WinResult {
+    const han = 1 + countRedDora([...this.players[seat].hand, agariTile]);
+    const fu = 30;
+    const isDealer = seat === this.dealerSeat;
+    const base = calculatePaymentFromHanFu(han, fu, isDealer, isTsumo);
+    const total = base + this.honba * 300 + this.kyotaku * 1000;
+
+    const yakuList: [string, number][] = [['Riichi', 1]];
+    const red = countRedDora([...this.players[seat].hand, agariTile]);
+    if (red > 0) yakuList.push(['赤ドラ', red]);
+
+    const scoreChanges: [number, number, number, number] = [0, 0, 0, 0];
+    if (isTsumo) {
+      const perPerson = Math.ceil(base / (isDealer ? 3 : 4) / 100) * 100;
+      for (let i = 0; i < 4; i++) {
+        if (i !== seat) scoreChanges[i] = -(perPerson + this.honba * 100);
+      }
+      scoreChanges[seat] = -scoreChanges.filter((_, i) => i !== seat).reduce((a, b) => a + b, 0) + this.kyotaku * 1000;
+    } else {
+      const loser = this.lastDiscard!.seat;
+      scoreChanges[loser] = -(base + this.honba * 300);
+      scoreChanges[seat] = total;
+    }
+
+    return {
+      type: isTsumo ? 'tsumo' : 'ron',
+      winnerSeat: seat,
+      loserSeat: isTsumo ? undefined : this.lastDiscard?.seat,
+      yaku: yakuList,
+      han,
+      fu,
+      scoreLevel: han >= 5 ? 'Mangan' : 'Normal',
+      payment: buildPayment(base, isDealer, isTsumo),
+      totalPoints: total,
+      scoreChanges,
+    };
+  }
+
+  // --------------------------------------------------------
+  // 聴牌判定 — シャンテン計算
+  // --------------------------------------------------------
+  isTenpai(seat: number): boolean {
+    const player = this.players[seat];
+    try {
+      const kindIds = handToKindIds(player.hand);
+      const exposed = player.melds.map(m => meldToLibMentsu(m));
+      const tehai = { closed: kindIds, exposed } as unknown as Tehai13;
+      assertTehai13(tehai);
+      return calculateShanten(tehai) === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 待ち牌を取得 */
+  getWaitingTiles(seat: number): string[] {
+    const player = this.players[seat];
+    try {
+      const kindIds = handToKindIds(player.hand);
+      const exposed = player.melds.map(m => meldToLibMentsu(m));
+      const tehai = { closed: kindIds, exposed } as unknown as Tehai13;
+      assertTehai13(tehai);
+      if (calculateShanten(tehai) !== 0) return [];
+      const ukeire = getUkeire(tehai);
+      return ukeire.map(k => kindIdToTile(k));
+    } catch {
+      return [];
+    }
+  }
+
+  // --------------------------------------------------------
+  // フリテン判定
+  // --------------------------------------------------------
+  private isFuriten(seat: number): boolean {
+    const player = this.players[seat];
+    const waitingTiles = this.getWaitingTiles(seat);
+    if (waitingTiles.length === 0) return false;
+
+    // 自分の捨て牌に待ち牌がある → フリテン
+    for (const discard of player.discards) {
+      for (const wait of waitingTiles) {
+        if (tilesMatch(discard, wait)) return true;
+      }
+    }
+    return false;
+  }
+
+  // --------------------------------------------------------
+  // リーチ判定・実行
+  // --------------------------------------------------------
+  canRiichi(seat: number): boolean {
+    const player = this.players[seat];
+    if (player.riichi) return false;
+    if (player.melds.some(m => m.type !== 'ankan')) return false; // 門前でない
+    if (player.score < 1000) return false;
+    if (this.wall.length < 4) return false;
+    return this.isTenpai(seat);
+  }
+
+  /** リーチで切れる牌（切った後もテンパイが維持される牌） */
+  getRiichiDiscardCandidates(seat: number): string[] {
+    if (!this.canRiichi(seat)) return [];
+    const player = this.players[seat];
+    const allTiles = [...player.hand];
+    if (player.tsumo) allTiles.push(player.tsumo);
+
+    const candidates: string[] = [];
+    const seen = new Set<string>();
+
+    for (const tile of allTiles) {
+      const norm = tile.startsWith('0') ? '5' + tile.slice(-1) : tile;
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+
+      // この牌を切った後の手牌でテンパイかチェック
+      const remaining = [...allTiles];
+      const idx = remaining.indexOf(tile);
+      if (idx >= 0) remaining.splice(idx, 1);
+
+      try {
+        const kindIds = handToKindIds(remaining);
+        const exposed = player.melds.map(m => meldToLibMentsu(m));
+        const tehai = { closed: kindIds, exposed } as unknown as Tehai13;
+        assertTehai13(tehai);
+        if (calculateShanten(tehai) === 0) {
+          candidates.push(tile);
+        }
+      } catch { /* skip */ }
+    }
+
+    return candidates;
+  }
+
+  executeRiichi(seat: number, discardTile: string): boolean {
+    if (!this.canRiichi(seat)) return false;
+    const player = this.players[seat];
+    player.riichi = true;
+    player.riichiTurn = this.turnCount;
+    player.score -= 1000;
+    this.kyotaku++;
+    return this.discard(discardTile);
+  }
+
+  // --------------------------------------------------------
+  // ポン判定・実行
+  // --------------------------------------------------------
+  canPon(seat: number, tile: string): boolean {
+    if (seat === this.currentActor) return false;
+    const player = this.players[seat];
+    if (player.riichi) return false; // リーチ中は鳴けない
+    const count = player.hand.filter(t => tilesMatch(t, tile)).length;
     return count >= 2;
   }
 
-  // チー可能なパターン取得
-  private getChiOptions(seat: number, tile: string): string[][] {
+  executePon(seat: number, tile: string): boolean {
+    if (!this.canPon(seat, tile)) return false;
+    const player = this.players[seat];
+    const fromSeat = this.lastDiscard!.seat;
+
+    // 手牌から2枚取り出す
+    const meldTiles: string[] = [tile]; // 鳴いた牌
+    let taken = 0;
+    const newHand: string[] = [];
+    for (const t of player.hand) {
+      if (taken < 2 && tilesMatch(t, tile)) {
+        meldTiles.push(t);
+        taken++;
+      } else {
+        newHand.push(t);
+      }
+    }
+
+    player.hand = newHand;
+    player.melds.push({
+      type: 'pon',
+      tiles: meldTiles,
+      fromSeat,
+      calledTile: tile,
+    });
+
+    // 捨て牌から鳴いた牌を除去（最後の牌）
+    const discards = this.players[fromSeat].discards;
+    if (discards.length > 0 && discards[discards.length - 1] === tile) {
+      discards.pop();
+    }
+
+    this.currentActor = seat;
+    this.phase = 'discard';
+    this.firstTurnFlags[seat] = false;
+    return true;
+  }
+
+  // --------------------------------------------------------
+  // チー判定・実行
+  // --------------------------------------------------------
+  canChi(seat: number, tile: string): boolean {
+    // チーは上家（左隣）からのみ
+    if ((this.lastDiscard!.seat + 1) % 4 !== seat) return false;
+    const player = this.players[seat];
+    if (player.riichi) return false;
+    return this.getChiOptions(seat, tile).length > 0;
+  }
+
+  getChiOptions(seat: number, tile: string): string[][] {
     const options: string[][] = [];
     const suit = tile.slice(-1);
-    if (suit === 'z') return options; // 字牌はチー不可
-    
-    const num = parseInt(tile.slice(0, -1));
-    const hand = this.state.players[seat].hand;
-    
-    // 順子の3パターンをチェック
+    if (suit === 'z') return options;
+
+    let num = parseInt(tile.slice(0, -1));
+    if (num === 0) num = 5; // 赤5
+    const hand = this.players[seat].hand;
+
     const patterns = [
-      [num - 2, num - 1], // tile が右端
-      [num - 1, num + 1], // tile が中央
-      [num + 1, num + 2], // tile が左端
+      [num - 2, num - 1],
+      [num - 1, num + 1],
+      [num + 1, num + 2],
     ];
-    
-    patterns.forEach(([a, b]) => {
+
+    for (const [a, b] of patterns) {
       if (a >= 1 && a <= 9 && b >= 1 && b <= 9) {
-        const tileA = `${a}${suit}`;
-        const tileB = `${b}${suit}`;
-        if (hand.some(t => this.tilesMatch(t, tileA)) && 
-            hand.some(t => this.tilesMatch(t, tileB))) {
-          options.push([tileA, tile, tileB].sort(this.compareTiles));
+        const tileA = hand.find(t => {
+          const s = t.slice(-1);
+          let n = parseInt(t.slice(0, -1));
+          if (n === 0) n = 5;
+          return s === suit && n === a;
+        });
+        const tileB = hand.find(t => {
+          const s = t.slice(-1);
+          let n = parseInt(t.slice(0, -1));
+          if (n === 0) n = 5;
+          return s === suit && n === b && t !== tileA;
+        });
+        if (tileA && tileB) {
+          options.push([tileA, tile, tileB].sort(compareTiles));
         }
       }
-    });
-    
+    }
     return options;
   }
 
-  // 牌の一致判定（赤ドラ考慮）
-  private tilesMatch(a: string, b: string): boolean {
-    const normA = a.startsWith('0') ? '5' + a.slice(-1) : a;
-    const normB = b.startsWith('0') ? '5' + b.slice(-1) : b;
-    return normA === normB;
+  executeChi(seat: number, tiles: string[]): boolean {
+    const player = this.players[seat];
+    const fromSeat = this.lastDiscard!.seat;
+    const calledTile = this.lastDiscard!.tile;
+
+    // 手牌から鳴いた牌以外の2枚を取り出す
+    const newHand = [...player.hand];
+    const meldTiles: string[] = [calledTile];
+
+    for (const t of tiles) {
+      if (t === calledTile) continue;
+      const idx = newHand.findIndex(h => h === t);
+      if (idx === -1) return false;
+      meldTiles.push(newHand.splice(idx, 1)[0]);
+    }
+
+    player.hand = newHand;
+    player.melds.push({
+      type: 'chi',
+      tiles: meldTiles.sort(compareTiles),
+      fromSeat,
+      calledTile,
+    });
+
+    // 捨て牌から鳴いた牌を除去
+    const discards = this.players[fromSeat].discards;
+    if (discards.length > 0 && discards[discards.length - 1] === calledTile) {
+      discards.pop();
+    }
+
+    this.currentActor = seat;
+    this.phase = 'discard';
+    this.firstTurnFlags[seat] = false;
+    return true;
   }
 
-  // リーチ可能判定（簡易版）
-  private canRiichi(seat: number): boolean {
-    const player = this.state.players[seat];
-    if (player.riichi || player.melds.length > 0 || player.score < 1000) {
+  // --------------------------------------------------------
+  // ツモ和了実行
+  // --------------------------------------------------------
+  executeTsumo(seat: number): WinResult | null {
+    if (!this.canTsumo(seat)) return null;
+    const player = this.players[seat];
+    const result = this.calculateWin(seat, true, player.tsumo!);
+    if (!result) return null;
+
+    // 点数移動
+    for (let i = 0; i < 4; i++) {
+      this.players[i].score += result.scoreChanges[i];
+    }
+
+    this.handFinished = true;
+    this.phase = 'finished';
+    return result;
+  }
+
+  // --------------------------------------------------------
+  // ロン和了実行
+  // --------------------------------------------------------
+  executeRon(seat: number): WinResult | null {
+    if (!this.lastDiscard) return null;
+    if (!this.canRon(seat, this.lastDiscard.tile)) return null;
+    const result = this.calculateWin(seat, false, this.lastDiscard.tile);
+    if (!result) return null;
+
+    // 点数移動
+    for (let i = 0; i < 4; i++) {
+      this.players[i].score += result.scoreChanges[i];
+    }
+
+    this.handFinished = true;
+    this.phase = 'finished';
+    return result;
+  }
+
+  // --------------------------------------------------------
+  // 九種九牌
+  // --------------------------------------------------------
+  canKyushukyuhai(seat: number): boolean {
+    const player = this.players[seat];
+    if (!this.firstTurnFlags[seat]) return false;
+    if (!player.tsumo) return false;
+    if (player.melds.length > 0) return false;
+    // 他家の鳴きがあった場合は不可
+    for (let i = 0; i < 4; i++) {
+      if (i !== seat && this.players[i].melds.length > 0) return false;
+    }
+    return isKyushukyuhai(player.hand, player.tsumo);
+  }
+
+  // --------------------------------------------------------
+  // 流局
+  // --------------------------------------------------------
+  isRyukyoku(): boolean {
+    return this.wall.length === 0;
+  }
+
+  /** 流局処理 → HandResult */
+  processRyukyoku(): HandResult {
+    const tenpaiSeats: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      if (this.isTenpai(i)) tenpaiSeats.push(i);
+    }
+
+    const scoreChanges: [number, number, number, number] = [0, 0, 0, 0];
+    const numTenpai = tenpaiSeats.length;
+
+    if (numTenpai > 0 && numTenpai < 4) {
+      const totalPenalty = 3000;
+      const tenpaiBonus = totalPenalty / numTenpai;
+      const notenPenalty = totalPenalty / (4 - numTenpai);
+
+      for (let i = 0; i < 4; i++) {
+        if (tenpaiSeats.includes(i)) {
+          scoreChanges[i] = tenpaiBonus;
+        } else {
+          scoreChanges[i] = -notenPenalty;
+        }
+      }
+
+      // 点数適用
+      for (let i = 0; i < 4; i++) {
+        this.players[i].score += scoreChanges[i];
+      }
+    }
+
+    const dealerRetains = tenpaiSeats.includes(this.dealerSeat);
+
+    this.handFinished = true;
+    this.phase = 'finished';
+
+    return {
+      type: 'ryukyoku',
+      tenpaiSeats,
+      scoreChanges,
+      dealerRetains,
+    };
+  }
+
+  // --------------------------------------------------------
+  // 局の終了 → 次の局へ
+  // --------------------------------------------------------
+  advanceToNextHand(dealerRetains: boolean): boolean {
+    // 本場更新
+    if (dealerRetains) {
+      this.honba++;
+      // 親連荘: handNumber は変わらない
+    } else {
+      this.honba = 0;
+      this.dealerSeat = (this.dealerSeat + 1) % 4;
+      this.handNumber++;
+    }
+
+    // 和了時の供託はクリア（勝者が取得済み）
+    // 流局時は供託は残る
+
+    // トビ（飛び）チェック
+    for (const p of this.players) {
+      if (p.score < 0) {
+        this.gameFinished = true;
+        return false;
+      }
+    }
+
+    // 東風戦: 東4局まで (handNumber >= 4 で終了)
+    if (this.handNumber >= 4) {
+      this.gameFinished = true;
       return false;
     }
-    // TODO: 聴牌判定
-    return this.state.remainingTiles >= 4;
+
+    // 次の局を開始
+    this.startNewHand();
+    return true;
   }
 
-  // ツモ和了判定（簡易版）
-  private canTsumo(seat: number): boolean {
-    // TODO: 和了判定実装
-    return false;
+  // --------------------------------------------------------
+  // 合法手一覧（LLM用）
+  // --------------------------------------------------------
+  getDiscardCandidates(seat: number): string[] {
+    const player = this.players[seat];
+    const tiles = new Set<string>();
+    player.hand.forEach(t => tiles.add(t));
+    if (player.tsumo) tiles.add(player.tsumo);
+    return Array.from(tiles);
   }
 
-  // ロン和了判定（簡易版）
-  private canRon(seat: number, tile: string): boolean {
-    // TODO: 和了判定実装
-    return false;
-  }
-
-  // アクション実行
-  applyAction(seat: number, action: ActionType): boolean {
-    switch (action.type) {
-      case 'draw':
-        return this.draw() !== null;
-      case 'discard':
-        return this.discard(action.tile);
-      case 'pass':
-        return true;
-      // TODO: 他のアクション実装
-      default:
-        return false;
+  /** ロン可能なプレイヤー一覧（頭ハネ順） */
+  getRonCandidates(discardedTile: string, discarderSeat: number): number[] {
+    const candidates: number[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const seat = (discarderSeat + i) % 4;
+      if (this.canRon(seat, discardedTile)) {
+        candidates.push(seat);
+      }
     }
+    return candidates;
   }
 
-  // 流局判定
-  isRyukyoku(): boolean {
-    return this.state.remainingTiles === 0;
-  }
-
-  // ゲーム終了判定
-  isGameOver(): boolean {
-    return this.state.isFinished;
+  /** ポン可能なプレイヤー一覧 */
+  getPonCandidates(discardedTile: string, discarderSeat: number): number[] {
+    const candidates: number[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const seat = (discarderSeat + i) % 4;
+      if (this.canPon(seat, discardedTile)) {
+        candidates.push(seat);
+      }
+    }
+    return candidates;
   }
 }
 
-// ユーティリティ関数
+// ============================================================
+// Part 5: 点数計算ヘルパー
+// ============================================================
+
+function getPaymentTotal(payment: Payment): number {
+  if (payment.type === 'ron') return payment.amount;
+  if (payment.type === 'koTsumo') return payment.amount[0] * 2 + payment.amount[1];
+  if (payment.type === 'oyaTsumo') return payment.amount * 3;
+  return 0;
+}
+
+/** 翻・符から点数を計算（簡易版） */
+function calculatePaymentFromHanFu(han: number, fu: number, isDealer: boolean, isTsumo: boolean): number {
+  let basePoints: number;
+
+  if (han >= 13) basePoints = 8000;
+  else if (han >= 11) basePoints = 6000;
+  else if (han >= 8) basePoints = 4000;
+  else if (han >= 6) basePoints = 3000;
+  else if (han >= 5) basePoints = 2000;
+  else {
+    basePoints = fu * Math.pow(2, 2 + han);
+    if (basePoints > 2000) basePoints = 2000; // 満貫切り上げ
+  }
+
+  if (isDealer) {
+    if (isTsumo) {
+      return Math.ceil(basePoints * 2 / 100) * 100 * 3;
+    } else {
+      return Math.ceil(basePoints * 6 / 100) * 100;
+    }
+  } else {
+    if (isTsumo) {
+      const childPay = Math.ceil(basePoints / 100) * 100;
+      const dealerPay = Math.ceil(basePoints * 2 / 100) * 100;
+      return childPay * 2 + dealerPay;
+    } else {
+      return Math.ceil(basePoints * 4 / 100) * 100;
+    }
+  }
+}
+
+function buildPayment(total: number, isDealer: boolean, isTsumo: boolean): Payment {
+  if (!isTsumo) {
+    return { type: 'ron' as const, amount: total };
+  }
+  if (isDealer) {
+    return { type: 'oyaTsumo' as const, amount: Math.ceil(total / 3 / 100) * 100 };
+  }
+  const childPay = Math.ceil(total / 4 / 100) * 100;
+  const dealerPay = Math.ceil(total / 2 / 100) * 100;
+  return { type: 'koTsumo' as const, amount: [childPay, dealerPay] as readonly [number, number] };
+}
+
+// ============================================================
+// Part 6: 表示ユーティリティ
+// ============================================================
+
 export function tileToEmoji(tile: string): string {
   const emojiMap: Record<string, string> = {
     '1m': '🀇', '2m': '🀈', '3m': '🀉', '4m': '🀊', '5m': '🀋',
@@ -379,16 +1128,13 @@ export function tileToEmoji(tile: string): string {
 export function tileToName(tile: string): string {
   const suit = tile.slice(-1);
   const num = tile.slice(0, -1);
-  const suitNames: Record<string, string> = {
-    m: '萬', p: '筒', s: '索', z: ''
-  };
+  const suitNames: Record<string, string> = { m: '萬', p: '筒', s: '索', z: '' };
   const honorNames: Record<string, string> = {
     '1': '東', '2': '南', '3': '西', '4': '北',
     '5': '白', '6': '發', '7': '中'
   };
-  
-  if (suit === 'z') {
-    return honorNames[num] || tile;
-  }
+  if (suit === 'z') return honorNames[num] || tile;
   return `${num === '0' ? '赤5' : num}${suitNames[suit]}`;
 }
+
+export { compareTiles, ALL_TILES };
