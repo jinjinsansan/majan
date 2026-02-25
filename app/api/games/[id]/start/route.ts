@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { MahjongEngine, tileToName } from '@/lib/mahjong-engine';
-import { decide } from '@/lib/llm';
+import { decide, decideNaki } from '@/lib/llm';
 import type { Twin } from '@/lib/types';
 
 export const maxDuration = 60; // Vercel Pro: 60秒まで
@@ -407,12 +407,155 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             }
           }
 
-          // ポンチェック（MVPではAIは基本的にパス — 鳴きはPhase1で本格実装）
-          // TODO: LLMに鳴き判断させる
-
-          // 次のターンへ
+          // === ポン/チーチェック ===
           if (!handOver) {
-            engine.nextTurn();
+            let called = false;
+
+            // ポンチェック（全プレイヤー）
+            const ponCandidates = engine.getPonCandidates(discardedTile, discarderSeat);
+            if (ponCandidates.length > 0) {
+              for (const ponSeat of ponCandidates) {
+                const ponTwin = orderedTwins[ponSeat];
+                let shouldPon = false;
+
+                if (useLLM && ponTwin) {
+                  try {
+                    const nakiDecision = await decideNaki(
+                      ponTwin,
+                      engine.getState(),
+                      'pon',
+                      discardedTile,
+                      process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
+                    );
+                    shouldPon = nakiDecision.shouldCall;
+                  } catch {
+                    // NPC style_params based fallback
+                    const nakiTendency = ponTwin.style_params?.naki_tendency ?? 50;
+                    shouldPon = Math.random() * 100 < nakiTendency;
+                  }
+                } else {
+                  const nakiTendency = ponTwin?.style_params?.naki_tendency ?? 50;
+                  shouldPon = Math.random() * 100 < nakiTendency;
+                }
+
+                if (shouldPon) {
+                  const success = engine.executePon(ponSeat, discardedTile);
+                  if (success) {
+                    seqNo++;
+                    const ponMeld = engine.getState().players[ponSeat].melds.slice(-1)[0];
+                    const { data: ponAction } = await supabase.from('actions').insert({
+                      game_id: gameId,
+                      hand_id: handId,
+                      seq_no: seqNo,
+                      actor_seat: ponSeat,
+                      action_type: 'pon',
+                      payload_json: {
+                        tile: discardedTile,
+                        tiles: ponMeld?.tiles || [discardedTile],
+                        from_seat: discarderSeat,
+                      },
+                    }).select().single();
+
+                    if (ponAction) {
+                      await supabase.from('reasoning_logs').insert({
+                        action_id: ponAction.id,
+                        summary_text: `${ponTwin?.name || '???'}が${tileToName(discardedTile)}をポン！`,
+                        detail_text: null,
+                        structured_json: {
+                          candidates: [],
+                          risk: 'medium',
+                          mode: 'push',
+                          target_yaku: [],
+                          is_naki_decision: true,
+                        },
+                        tokens_used: 0,
+                        model_name: 'engine',
+                      });
+                    }
+
+                    called = true;
+                    // ポン後は打牌フェーズに戻る（nextTurnしない）
+                    break;
+                  }
+                }
+              }
+            }
+
+            // チーチェック（上家のみ、ポンされなかった場合）
+            if (!called) {
+              const nextSeat = (discarderSeat + 1) % 4;
+              if (engine.canChi(nextSeat, discardedTile)) {
+                const chiTwin = orderedTwins[nextSeat];
+                let shouldChi = false;
+
+                if (useLLM && chiTwin) {
+                  try {
+                    const nakiDecision = await decideNaki(
+                      chiTwin,
+                      engine.getState(),
+                      'chi',
+                      discardedTile,
+                      process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai'
+                    );
+                    shouldChi = nakiDecision.shouldCall;
+                  } catch {
+                    const nakiTendency = chiTwin.style_params?.naki_tendency ?? 50;
+                    shouldChi = Math.random() * 100 < nakiTendency * 0.7; // チーはポンより控えめ
+                  }
+                } else {
+                  const nakiTendency = chiTwin?.style_params?.naki_tendency ?? 50;
+                  shouldChi = Math.random() * 100 < nakiTendency * 0.7;
+                }
+
+                if (shouldChi) {
+                  const chiOptions = engine.getChiOptions(nextSeat, discardedTile);
+                  if (chiOptions.length > 0) {
+                    const chosenOption = chiOptions[0]; // 最初の選択肢
+                    const success = engine.executeChi(nextSeat, chosenOption);
+                    if (success) {
+                      seqNo++;
+                      const chiMeld = engine.getState().players[nextSeat].melds.slice(-1)[0];
+                      const { data: chiAction } = await supabase.from('actions').insert({
+                        game_id: gameId,
+                        hand_id: handId,
+                        seq_no: seqNo,
+                        actor_seat: nextSeat,
+                        action_type: 'chi',
+                        payload_json: {
+                          tile: discardedTile,
+                          tiles: chiMeld?.tiles || chosenOption,
+                          from_seat: discarderSeat,
+                        },
+                      }).select().single();
+
+                      if (chiAction) {
+                        await supabase.from('reasoning_logs').insert({
+                          action_id: chiAction.id,
+                          summary_text: `${chiTwin?.name || '???'}が${tileToName(discardedTile)}をチー！`,
+                          detail_text: null,
+                          structured_json: {
+                            candidates: [],
+                            risk: 'medium',
+                            mode: 'push',
+                            target_yaku: [],
+                            is_naki_decision: true,
+                          },
+                          tokens_used: 0,
+                          model_name: 'engine',
+                        });
+                      }
+
+                      called = true;
+                    }
+                  }
+                }
+              }
+            }
+
+            // 鳴かなかった場合は次のターンへ
+            if (!called) {
+              engine.nextTurn();
+            }
           }
         }
       }

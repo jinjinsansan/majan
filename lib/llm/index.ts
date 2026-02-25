@@ -192,6 +192,79 @@ function fallbackDecision(candidates: string[]): LLMDecision {
   };
 }
 
+// 鳴き判断の型
+export interface NakiDecision {
+  shouldCall: boolean;
+  reason: string;
+}
+
+// 鳴き判断関数
+export async function decideNaki(
+  twin: Twin,
+  state: any,
+  callType: 'pon' | 'chi',
+  tile: string,
+  preferredModel: 'openai' | 'anthropic' = 'openai'
+): Promise<NakiDecision> {
+  const system = `${twin.persona_prompt}
+
+あなたは麻雀の鳴き判断をします。${callType === 'pon' ? 'ポン' : 'チー'}するかどうかを判断してください。
+公開手牌ルール（全員の手牌が見える）です。
+JSON形式で返答してください。`;
+
+  const playerState = state.players?.[state.currentActor];
+  const user = `${callType === 'pon' ? 'ポン' : 'チー'}可能な牌: ${tile}
+自分の手牌: ${playerState?.hand?.join(' ') || '不明'}
+残りツモ: ${state.remainingTiles}
+
+以下のJSON形式で返答:
+{"should_call": true/false, "reason": "理由（30文字以内）"}`;
+
+  try {
+    if (preferredModel === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default;
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const response = await anthropic.messages.create({
+        model: 'claude-3-haiku-20240307',
+        max_tokens: 100,
+        system,
+        messages: [{ role: 'user', content: user }],
+      });
+      const content = response.content[0]?.type === 'text' ? response.content[0].text : '{}';
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      return { shouldCall: parsed.should_call ?? false, reason: parsed.reason || '' };
+    }
+
+    if (process.env.OPENAI_API_KEY) {
+      const OpenAI = (await import('openai')).default;
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 100,
+        temperature: 0.7,
+      });
+      const content = response.choices[0]?.message?.content || '{}';
+      const parsed = JSON.parse(content);
+      return { shouldCall: parsed.should_call ?? false, reason: parsed.reason || '' };
+    }
+  } catch (e) {
+    console.error('Naki LLM error:', e);
+  }
+
+  // フォールバック: style_paramsに基づく判断
+  const nakiTendency = twin.style_params?.naki_tendency ?? 50;
+  return {
+    shouldCall: Math.random() * 100 < nakiTendency * (callType === 'chi' ? 0.7 : 1),
+    reason: 'フォールバック判断',
+  };
+}
+
 // メイン決定関数
 export async function decide(
   twin: Twin,

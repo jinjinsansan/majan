@@ -74,11 +74,17 @@ export default function NewGamePage() {
     return [...myTwins, ...publicTwins, ...npcs].find(t => t.id === id);
   };
 
-  const canStart = seats.filter(s => s !== null).length === 4;
+  const allFilled = seats.filter(s => s !== null).length === 4;
+  const hasOwnTwin = seats.some(s => s !== null && myTwins.some(t => t.id === s));
+  const canStart = allFilled && hasOwnTwin;
 
   const handleStart = async () => {
-    if (!canStart) return;
-    
+    if (!allFilled) return;
+    if (!hasOwnTwin) {
+      setError('自分のTwinを最低1席に配置してください');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -244,7 +250,7 @@ export default function NewGamePage() {
             disabled={!canStart || loading}
             onClick={handleStart}
           >
-            {loading ? '作成中...' : `対局開始（${seats.filter(s => s).length}/4人選択済み）`}
+            {loading ? '作成中...' : !allFilled ? `対局開始（${seats.filter(s => s).length}/4人選択済み）` : !hasOwnTwin ? '自分のTwinを配置してください' : '対局開始'}
           </Button>
         </div>
       </div>
