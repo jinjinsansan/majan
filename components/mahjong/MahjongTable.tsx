@@ -2,7 +2,31 @@
 
 import { useMemo } from 'react';
 import type { Twin, Action } from '@/lib/types';
-import { tileToEmoji } from '@/lib/mahjong-engine';
+
+// 牌をテキスト表示用に変換
+function tileToText(tile: string): string {
+  const suit = tile.slice(-1);
+  const num = tile.slice(0, -1);
+  
+  if (suit === 'z') {
+    const honors: Record<string, string> = {
+      '1': '東', '2': '南', '3': '西', '4': '北',
+      '5': '白', '6': '發', '7': '中'
+    };
+    return honors[num] || tile;
+  }
+  
+  const suitChars: Record<string, string> = {
+    'm': '萬', 'p': '筒', 's': '索'
+  };
+  
+  // 赤ドラは赤い5として表示
+  if (num === '0') {
+    return '5' + suitChars[suit]?.charAt(0);
+  }
+  
+  return num + suitChars[suit]?.charAt(0);
+}
 
 interface MahjongTableProps {
   twins: Twin[];
@@ -133,14 +157,14 @@ export function MahjongTable({ twins, actions, currentAction }: MahjongTableProp
                   <p className="text-sm text-muted-foreground mb-2">{player.score.toLocaleString()}点</p>
                   
                   {/* 手牌（公開手牌ルール） */}
-                  <div className="flex flex-wrap gap-0.5 max-w-[280px]">
+                  <div className="flex flex-wrap gap-1 max-w-[320px]">
                     {player.hand.sort().map((tile, i) => (
                       <span 
                         key={i} 
-                        className="text-xl bg-white/90 rounded px-0.5 shadow-sm"
+                        className="inline-block w-7 h-10 bg-amber-50 border border-amber-200 rounded text-center leading-10 text-lg shadow-sm"
                         title={tile}
                       >
-                        {tileToEmoji(tile)}
+                        {tileToText(tile)}
                       </span>
                     ))}
                   </div>
@@ -149,14 +173,14 @@ export function MahjongTable({ twins, actions, currentAction }: MahjongTableProp
 
               {/* 捨て牌 */}
               <div className={`absolute ${discardPositions[seat]}`}>
-                <div className="flex flex-wrap gap-0.5 max-w-[180px] justify-center">
+                <div className="flex flex-wrap gap-0.5 max-w-[200px] justify-center">
                   {player.discards.slice(-12).map((tile, i) => (
                     <span 
                       key={i} 
-                      className="text-lg opacity-80"
+                      className="inline-block w-6 h-8 bg-gray-200 border border-gray-300 rounded text-center leading-8 text-xs shadow-sm text-gray-700"
                       title={tile}
                     >
-                      {tileToEmoji(tile)}
+                      {tileToText(tile)}
                     </span>
                   ))}
                 </div>
