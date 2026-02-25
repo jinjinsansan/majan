@@ -30,6 +30,12 @@ function reconstructState(actions: Action[]) {
     const payload = action.payload_json || {};
 
     switch (action.action_type) {
+      case 'deal':
+        // 配牌
+        if (payload.tiles && Array.isArray(payload.tiles)) {
+          players[seat].hand = [...payload.tiles];
+        }
+        break;
       case 'draw':
         if (payload.tile) {
           players[seat].hand.push(payload.tile);

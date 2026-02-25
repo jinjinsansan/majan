@@ -62,7 +62,7 @@ export async function POST(
   }
 }
 
-// 対局実行（簡易版 - 本番はCloudflare Workersで）
+// 対局実行（簡易版 - Vercel用に5ターンだけ実行）
 async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const engine = new MahjongEngine();
   let seqNo = 0;
@@ -85,8 +85,23 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
     
     handId = hand?.id;
 
-    // 東風戦（最大4局、簡易版は50手で終了）
-    const maxTurns = 50;
+    // 初期手牌をアクションとして記録
+    const initialState = engine.getState();
+    for (let seat = 0; seat < 4; seat++) {
+      const player = initialState.players[seat];
+      seqNo++;
+      await supabase.from('actions').insert({
+        game_id: gameId,
+        hand_id: handId,
+        seq_no: seqNo,
+        actor_seat: seat,
+        action_type: 'deal',
+        payload_json: { tiles: player.hand },
+      });
+    }
+
+    // Vercelタイムアウト対策: 5ターンだけ実行
+    const maxTurns = 5;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const state = engine.getState();
