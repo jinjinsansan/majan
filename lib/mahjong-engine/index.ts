@@ -1278,7 +1278,12 @@ export class MahjongEngine {
    * シャンテン数を最小化する牌を選択する。
    * 同シャンテンの場合は受入枚数が多い方を優先。
    */
-  chooseBestDiscardHeuristic(seat: number): string {
+  chooseBestDiscardHeuristic(seat: number): {
+    tile: string;
+    shanten: number;
+    ukeireCount: number;
+    shantenBefore: number;
+  } {
     const player = this.players[seat];
     const allTiles = [...player.hand];
     if (player.tsumo) allTiles.push(player.tsumo);
@@ -1288,8 +1293,30 @@ export class MahjongEngine {
     let bestShanten = 99;
     let bestUkeireCount = -1;
 
+    // ツモ前（14枚）のシャンテン数を計算
+    let shantenBefore = 99;
+    try {
+      const allKindIds = handToKindIds(allTiles);
+      const exposed = player.melds.map(m => meldToLibMentsu(m));
+      const tehai14 = { closed: allKindIds, exposed } as unknown as Tehai14;
+      assertTehai14(tehai14);
+      // 14枚のシャンテンは13枚+1として扱う（任意の1枚を切った最小値）
+      shantenBefore = 99;
+      for (const t of candidates) {
+        const rem = [...allTiles];
+        const ri = rem.indexOf(t);
+        if (ri >= 0) rem.splice(ri, 1);
+        try {
+          const kIds = handToKindIds(rem);
+          const t13 = { closed: kIds, exposed } as unknown as Tehai13;
+          assertTehai13(t13);
+          const s = calculateShanten(t13);
+          if (s < shantenBefore) shantenBefore = s;
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+
     for (const tile of candidates) {
-      // この牌を切った後の手牌
       const remaining = [...allTiles];
       const idx = remaining.indexOf(tile);
       if (idx >= 0) remaining.splice(idx, 1);
@@ -1304,7 +1331,6 @@ export class MahjongEngine {
         if (shanten < bestShanten) {
           bestShanten = shanten;
           bestTile = tile;
-          // 受入枚数も計算
           try {
             const ukeire = getUkeire(tehai);
             bestUkeireCount = ukeire.length;
@@ -1312,7 +1338,6 @@ export class MahjongEngine {
             bestUkeireCount = 0;
           }
         } else if (shanten === bestShanten) {
-          // 同シャンテンなら受入枚数で比較
           try {
             const ukeire = getUkeire(tehai);
             if (ukeire.length > bestUkeireCount) {
@@ -1326,7 +1351,12 @@ export class MahjongEngine {
       }
     }
 
-    return bestTile;
+    return {
+      tile: bestTile,
+      shanten: bestShanten,
+      ukeireCount: bestUkeireCount,
+      shantenBefore,
+    };
   }
 
   /** ロン可能なプレイヤー一覧（頭ハネ順） */
