@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { randomUUID } from 'node:crypto';
 import { createServiceClient } from '@/lib/supabase/server';
 import { MahjongEngine, tileToName } from '@/lib/mahjong-engine';
 import type { Twin } from '@/lib/types';
@@ -1183,7 +1184,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
     reasoning?: { summary_text: string; detail_text: string | null; structured_json: any; tokens_used: number; model_name: string },
   ) {
     if (reasoning) {
-      const actionId = crypto.randomUUID();
+      const actionId = randomUUID();
       pendingActions.push({ id: actionId, ...action });
       pendingReasonings.push({ action_id: actionId, ...reasoning });
     } else {
