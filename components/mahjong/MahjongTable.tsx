@@ -2,14 +2,15 @@
 
 import { useMemo } from 'react';
 import { PlayerSeat } from './PlayerSeat';
-import { GameOverlay } from './GameOverlay';
+import { MahjongTile } from './MahjongTile';
 import { tileToDisplay } from './tile-utils';
-import type { Twin, Action } from '@/lib/types';
+import type { Twin, Action, ReasoningLog } from '@/lib/types';
 
 interface MahjongTableProps {
   twins: Twin[];
   actions: Action[];
   currentAction?: Action;
+  currentReasoning?: ReasoningLog | null;
   highlightTiles?: string[];
 }
 
@@ -222,63 +223,167 @@ function reconstructState(actions: Action[]) {
   return { players, currentActor, round, honba, kyotaku, remainingTiles, doraIndicators, dealerSeat };
 }
 
-export function MahjongTable({ twins, actions, currentAction, highlightTiles = [] }: MahjongTableProps) {
+export function MahjongTable({ twins, actions, currentAction, currentReasoning, highlightTiles = [] }: MahjongTableProps) {
   const state = useMemo(() => reconstructState(actions), [actions]);
   const seatNames = ['東', '南', '西', '北'];
   const seatColors = ['text-red-400', 'text-blue-400', 'text-green-400', 'text-yellow-400'];
 
+  // Build action description text
+  const actionText = useMemo(() => {
+    if (!currentAction) return null;
+    const actorName = twins[currentAction.actor_seat]?.name || seatNames[currentAction.actor_seat];
+    const payload = currentAction.payload_json || {};
+
+    switch (currentAction.action_type) {
+      case 'discard':
+        return `${actorName} が ${tileToDisplay(payload.tile || '').text} を切った`;
+      case 'draw':
+        return `${actorName} がツモった`;
+      case 'riichi':
+        return `${actorName} がリーチ!`;
+      case 'tsumo':
+        return `${actorName} がツモ和了!`;
+      case 'ron':
+        return `${actorName} がロン!`;
+      case 'pon':
+        return `${actorName} がポン!`;
+      case 'chi':
+        return `${actorName} がチー!`;
+      case 'kan': {
+        const kanLabel = payload.kan_type === 'ankan' ? '暗槓'
+          : payload.kan_type === 'kakan' ? '加槓' : '大明槓';
+        return `${actorName} が${kanLabel}!`;
+      }
+      case 'ryukyoku':
+        return '流局';
+      default:
+        return null;
+    }
+  }, [currentAction, twins, seatNames]);
+
+  // Agari overlay info
+  const agariInfo = useMemo(() => {
+    if (!currentAction) return null;
+    const payload = currentAction.payload_json || {};
+    const actorName = twins[currentAction.actor_seat]?.name || seatNames[currentAction.actor_seat];
+
+    if (currentAction.action_type === 'tsumo') {
+      return {
+        label: 'ツモ!',
+        labelColor: 'text-primary',
+        actor: actorName,
+        yaku: payload.yaku as [string, number][] | undefined,
+        han: payload.han as number | undefined,
+        fu: payload.fu as number | undefined,
+        scoreLevel: payload.score_level as string | undefined,
+      };
+    }
+    if (currentAction.action_type === 'ron') {
+      return {
+        label: 'ロン!',
+        labelColor: 'text-red-400',
+        actor: actorName,
+        yaku: payload.yaku as [string, number][] | undefined,
+        han: payload.han as number | undefined,
+        fu: payload.fu as number | undefined,
+        scoreLevel: payload.score_level as string | undefined,
+        fromTile: payload.tile ? tileToDisplay(payload.tile).text : undefined,
+        fromPlayer: payload.from_seat !== undefined
+          ? (twins[payload.from_seat]?.name || seatNames[payload.from_seat])
+          : undefined,
+      };
+    }
+    if (currentAction.action_type === 'ryukyoku') {
+      const tenpaiSeats = payload.tenpai_seats as number[] | undefined;
+      return {
+        label: '流局',
+        labelColor: 'text-yellow-400',
+        actor: null,
+        tenpaiPlayers: tenpaiSeats && tenpaiSeats.length > 0
+          ? tenpaiSeats.map(s => twins[s]?.name || seatNames[s]).join(' / ')
+          : '全員ノーテン',
+      };
+    }
+    return null;
+  }, [currentAction, twins, seatNames]);
+
+  // Reasoning display
+  const reasoning = currentReasoning;
+  const structured = reasoning?.structured_json;
+
   return (
-    <div className="h-full flex flex-col">
-      {/* 局情報ヘッダー */}
-      <div className="text-center py-2 border-b flex items-center justify-center gap-4 flex-wrap">
+    <div className="flex flex-col gap-3">
+      {/* Game info bar */}
+      <div className="flex items-center justify-center gap-4 flex-wrap py-2 px-4 bg-card rounded-lg border">
         <span className="font-semibold text-lg">{state.round}</span>
         {state.honba > 0 && <span className="text-sm text-muted-foreground">{state.honba}本場</span>}
         {state.kyotaku > 0 && (
-          <span className="text-sm text-yellow-400 flex items-center gap-1">
-            供託{state.kyotaku}
-          </span>
+          <span className="text-sm text-yellow-400">供託{state.kyotaku}</span>
         )}
         <span className="text-sm text-muted-foreground">残り{state.remainingTiles}枚</span>
-        <div className="text-xs bg-yellow-500/10 text-yellow-400 px-2 py-0.5 rounded border border-yellow-500/30">
-          公開手牌ルール
-        </div>
+        {state.doraIndicators.length > 0 && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">ドラ:</span>
+            {state.doraIndicators.map((tile, i) => (
+              <MahjongTile key={i} tile={tile} size="sm" />
+            ))}
+          </div>
+        )}
+
+        {/* Current action description */}
+        {actionText && (
+          <>
+            <span className="text-muted-foreground">|</span>
+            <span className="text-sm">
+              <span className={currentAction ? seatColors[currentAction.actor_seat] : ''}>
+                {actionText}
+              </span>
+            </span>
+          </>
+        )}
       </div>
 
-      {/* 卓エリア */}
-      <div className="flex-1 relative bg-green-900/30 rounded-lg m-4 min-h-[500px]">
-        {/* 中央: ドラ表示 */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center z-10">
-          <div className="bg-card p-3 rounded-lg shadow-lg">
-            <p className="text-xs text-muted-foreground mb-1">ドラ表示</p>
-            <div className="flex gap-1 justify-center">
-              {state.doraIndicators.length > 0 ? (
-                state.doraIndicators.map((tile, i) => {
-                  const t = tileToDisplay(tile);
-                  return (
-                    <div key={i} className={`px-1.5 py-0.5 bg-amber-50 border border-amber-400 rounded text-sm font-bold ${t.isRed ? 'text-red-600' : 'text-gray-800'}`}>
-                      {t.text}
-                    </div>
-                  );
-                })
-              ) : (
-                <span className="text-sm opacity-50">-</span>
-              )}
+      {/* Agari / Ryukyoku overlay */}
+      {agariInfo && (
+        <div className="bg-card border-2 border-primary rounded-lg p-4 text-center animate-overlay-in">
+          <p className={`text-2xl font-bold ${agariInfo.labelColor} mb-1`}>{agariInfo.label}</p>
+          {agariInfo.actor && (
+            <p className="text-sm text-muted-foreground mb-2">{agariInfo.actor}</p>
+          )}
+          {'fromTile' in agariInfo && agariInfo.fromTile && (
+            <p className="text-xs text-muted-foreground mb-2">
+              ロン牌: {agariInfo.fromTile}
+              {'fromPlayer' in agariInfo && agariInfo.fromPlayer && ` (${agariInfo.fromPlayer}から)`}
+            </p>
+          )}
+          {'tenpaiPlayers' in agariInfo && (
+            <p className="text-sm mt-1">テンパイ: {agariInfo.tenpaiPlayers}</p>
+          )}
+          {agariInfo.yaku && (
+            <div className="flex flex-wrap justify-center gap-2 my-2">
+              {agariInfo.yaku.map(([name, han], i) => (
+                <span key={i} className="text-sm">
+                  {name} <span className={agariInfo.labelColor}>{han}翻</span>
+                </span>
+              ))}
             </div>
-          </div>
+          )}
+          {agariInfo.han && (
+            <p className="text-lg font-semibold">
+              {agariInfo.han}翻{agariInfo.fu}符
+            </p>
+          )}
+          {agariInfo.scoreLevel && (
+            <p className={`text-sm font-semibold mt-1 ${agariInfo.labelColor}`}>{agariInfo.scoreLevel}</p>
+          )}
         </div>
+      )}
 
-        {/* イベントオーバーレイ */}
-        <GameOverlay
-          currentAction={currentAction}
-          twins={twins}
-          seatNames={seatNames}
-        />
-
-        {/* 各席 */}
+      {/* 2x2 Player grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {[0, 1, 2, 3].map((seat) => (
           <PlayerSeat
             key={seat}
-            seat={seat}
             twin={twins[seat]}
             hand={state.players[seat].hand}
             tsumo={state.players[seat].tsumo}
@@ -288,35 +393,87 @@ export function MahjongTable({ twins, actions, currentAction, highlightTiles = [
             riichiDiscardIndex={state.players[seat].riichiDiscardIndex}
             score={state.players[seat].score}
             isCurrentActor={state.currentActor === seat}
-            isLatestDiscard={
-              currentAction?.action_type === 'discard' &&
-              currentAction?.actor_seat === seat
-            }
-            highlightTiles={highlightTiles}
             seatName={seatNames[seat]}
             seatColor={seatColors[seat]}
           />
         ))}
       </div>
 
-      {/* 最新アクション表示 */}
-      {currentAction && (
-        <div className="text-center py-2 border-t">
-          <span className="text-sm">
-            <span className={seatColors[currentAction.actor_seat]}>
-              {twins[currentAction.actor_seat]?.name || seatNames[currentAction.actor_seat]}
-            </span>
-            {' '}
-            {currentAction.action_type === 'discard' && `が ${tileToDisplay(currentAction.payload_json?.tile || '').text} を切った`}
-            {currentAction.action_type === 'draw' && 'がツモった'}
-            {currentAction.action_type === 'riichi' && 'がリーチ！'}
-            {currentAction.action_type === 'tsumo' && 'がツモ和了！'}
-            {currentAction.action_type === 'ron' && 'がロン！'}
-            {currentAction.action_type === 'pon' && 'がポン！'}
-            {currentAction.action_type === 'chi' && 'がチー！'}
-            {currentAction.action_type === 'kan' && `が${currentAction.payload_json?.kan_type === 'ankan' ? '暗槓' : currentAction.payload_json?.kan_type === 'kakan' ? '加槓' : '大明槓'}！`}
-            {currentAction.action_type === 'ryukyoku' && '— 流局'}
-          </span>
+      {/* Integrated reasoning section */}
+      {reasoning && (
+        <div className="bg-card rounded-lg border p-4 animate-fade-in">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <span className="text-sm font-semibold text-muted-foreground">思考</span>
+            {currentAction && (
+              <span className={`text-sm font-semibold ${seatColors[currentAction.actor_seat]}`}>
+                {twins[currentAction.actor_seat]?.name || seatNames[currentAction.actor_seat]}
+              </span>
+            )}
+
+            {structured?.risk && (
+              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                structured.risk === 'high' ? 'bg-red-500/20 text-red-400' :
+                structured.risk === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+                'bg-green-500/20 text-green-400'
+              }`}>
+                {structured.risk === 'high' ? '危険'
+                  : structured.risk === 'medium' ? '注意' : '安全'}
+              </span>
+            )}
+
+            {structured?.mode && (
+              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                structured.mode === 'push' ? 'bg-red-500/10 text-red-300' :
+                structured.mode === 'pull' ? 'bg-blue-500/10 text-blue-300' :
+                'bg-gray-500/10 text-gray-300'
+              }`}>
+                {structured.mode === 'push' ? '押し'
+                  : structured.mode === 'pull' ? '引き' : 'バランス'}
+              </span>
+            )}
+
+            {structured?.target_yaku && structured.target_yaku.length > 0 && (
+              <div className="flex gap-1 ml-auto">
+                {structured.target_yaku.map((yaku, i) => (
+                  <span
+                    key={i}
+                    className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded"
+                  >
+                    {yaku}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <p className="text-sm leading-relaxed">{reasoning.summary_text}</p>
+
+          {structured?.candidates && structured.candidates.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {structured.candidates.map((candidate, i) => (
+                <span
+                  key={i}
+                  className="text-xs p-1.5 rounded bg-muted/50 inline-flex items-center gap-1.5"
+                >
+                  <span className="font-bold text-primary bg-primary/10 px-1 rounded">
+                    {candidate.tile}
+                  </span>
+                  <span className="text-muted-foreground">{candidate.reason_short}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {reasoning.detail_text && (
+            <details className="mt-2">
+              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+                詳細を見る
+              </summary>
+              <div className="mt-2 p-2 bg-muted/50 rounded text-xs leading-relaxed whitespace-pre-wrap">
+                {reasoning.detail_text}
+              </div>
+            </details>
+          )}
         </div>
       )}
     </div>

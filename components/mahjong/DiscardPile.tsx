@@ -1,42 +1,46 @@
 'use client';
 
-import { tileToDisplay } from './tile-utils';
+import { MahjongTile } from './MahjongTile';
 
 interface DiscardPileProps {
   discards: string[];
   isLatestDiscard?: boolean;
   latestTile?: string;
-  riichiIndex?: number; // リーチ宣言牌のインデックス
+  riichiIndex?: number;
 }
 
 export function DiscardPile({ discards, isLatestDiscard, latestTile, riichiIndex }: DiscardPileProps) {
-  // 6列表示
   const visibleDiscards = discards.slice(-18);
 
-  return (
-    <div className="flex flex-wrap gap-0.5 max-w-[200px] justify-center">
-      {visibleDiscards.map((tile, i) => {
-        const t = tileToDisplay(tile);
-        const actualIndex = discards.length - visibleDiscards.length + i;
-        const isLast = isLatestDiscard && i === visibleDiscards.length - 1;
-        const isRiichiTile = riichiIndex !== undefined && actualIndex === riichiIndex;
+  // Split into rows of 6
+  const rows: string[][] = [];
+  for (let i = 0; i < visibleDiscards.length; i += 6) {
+    rows.push(visibleDiscards.slice(i, i + 6));
+  }
 
-        return (
-          <div
-            key={`${tile}-${i}`}
-            className={`
-              px-0.5 bg-gray-200 border rounded text-[10px] font-bold
-              transition-all duration-200
-              ${t.isRed ? 'text-red-500' : 'text-gray-700'}
-              ${isLast ? 'border-primary bg-primary/10 animate-fade-in' : 'border-gray-400'}
-              ${isRiichiTile ? 'rotate-90 mx-0.5' : ''}
-            `}
-            title={tile}
-          >
-            {t.text}
-          </div>
-        );
-      })}
+  return (
+    <div className="flex flex-col gap-0.5 max-w-[200px] items-center">
+      {rows.map((row, rowIndex) => (
+        <div key={rowIndex} className="flex gap-0.5 justify-center">
+          {row.map((tile, colIndex) => {
+            const flatIndex = rowIndex * 6 + colIndex;
+            const actualIndex = discards.length - visibleDiscards.length + flatIndex;
+            const isLast = isLatestDiscard && flatIndex === visibleDiscards.length - 1;
+            const isRiichiTile = riichiIndex !== undefined && actualIndex === riichiIndex;
+
+            return (
+              <MahjongTile
+                key={`discard-${tile}-${flatIndex}`}
+                tile={tile}
+                size="sm"
+                isRiichi={isRiichiTile}
+                isHighlighted={isLast}
+                className={isLast ? 'animate-fade-in' : ''}
+              />
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }

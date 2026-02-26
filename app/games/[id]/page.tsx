@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { createClient } from '@/lib/supabase/client';
 import { MahjongTable } from '@/components/mahjong/MahjongTable';
-import { ReasoningPanel } from '@/components/reasoning/ReasoningPanel';
 import { PlaybackControls } from '@/components/mahjong/PlaybackControls';
 import type { Game, Twin, Action, ReasoningLog } from '@/lib/types';
 
@@ -22,7 +21,7 @@ export default function GamePage() {
   const [reasonings, setReasonings] = useState<ReasoningLog[]>([]);
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [playbackSpeed, setPlaybackSpeed] = useState(0.5);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +84,17 @@ export default function GamePage() {
   useEffect(() => {
     loadGame();
   }, [loadGame]);
+
+  // After loading, auto-enter replay mode starting at action 0 when actions exist
+  useEffect(() => {
+    if (!loading && game && viewMode === null && actions.length > 0) {
+      if (game.status === 'finished' || game.status === 'running') {
+        setViewMode('replay');
+        setCurrentActionIndex(0);
+        setIsPlaying(false);
+      }
+    }
+  }, [loading, game, viewMode, actions.length]);
 
   // Supabase Realtime（running中 & 続きから観戦モード）
   useEffect(() => {
@@ -162,7 +172,7 @@ export default function GamePage() {
     }
   }, [game?.status, viewMode, id, loadGame]);
 
-  // 自動再生
+  // 自動再生 - speed 0.5 means 1 action every 2 seconds, speed 1 = 1/sec, speed 2 = 2/sec, etc.
   useEffect(() => {
     if (!isPlaying || currentActionIndex >= actions.length - 1) {
       setIsPlaying(false);
@@ -222,26 +232,21 @@ export default function GamePage() {
   const replayFromStart = () => {
     setViewMode('replay');
     setCurrentActionIndex(0);
-    setIsPlaying(true);
+    setIsPlaying(false);
   };
 
-  // 候補ハイライト
-  const handleHighlight = (tiles: string[]) => {
-    setHighlightTiles(tiles);
-    setTimeout(() => setHighlightTiles([]), 3000);
-  };
-
-  // 現在のアクションまでの思考ログを取得
-  const currentReasonings = reasonings.filter(r => {
-    const actionIndex = actions.findIndex(a => a.id === r.action_id);
-    return actionIndex <= currentActionIndex;
-  });
+  // Find reasoning for the current action
+  const currentReasoning = actions[currentActionIndex]
+    ? reasonings.find(r => r.action_id === actions[currentActionIndex].id) || null
+    : null;
 
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="text-4xl mb-4">🀄</div>
+          <div className="text-4xl mb-4">
+            <span role="img" aria-label="mahjong">&#x1F004;</span>
+          </div>
           <p className="text-muted-foreground">読み込み中...</p>
         </div>
       </main>
@@ -294,7 +299,7 @@ export default function GamePage() {
                 ))}
               </div>
               <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-400">
-                ⚠️ この対局は公開手牌ルールです。全プレイヤーの手牌が常に表示されます。
+                この対局は公開手牌ルールです。全プレイヤーの手牌が常に表示されます。
               </div>
               {error && (
                 <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
@@ -302,7 +307,7 @@ export default function GamePage() {
                 </div>
               )}
               <Button onClick={startGame} size="lg" className="w-full" disabled={starting}>
-                {starting ? '開始中...' : '🀄 対局開始'}
+                {starting ? '開始中...' : '対局開始'}
               </Button>
             </CardContent>
           </Card>
@@ -311,147 +316,79 @@ export default function GamePage() {
     );
   }
 
-  // finished/running でまだ viewMode を選択していない場合
-  if (viewMode === null && actions.length > 0) {
-    return (
-      <main className="min-h-screen flex flex-col">
-        <header className="border-b p-4">
-          <div className="container mx-auto">
-            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
-              ← ダッシュボード
-            </Link>
-            <h1 className="text-xl font-semibold mt-1">
-              {game.status === 'running' ? '対局中' : '対局終了'}
-            </h1>
-          </div>
-        </header>
-        <div className="flex-1 flex items-center justify-center">
-          <Card className="max-w-md text-center p-8">
-            <CardHeader>
-              <CardTitle>
-                {game.status === 'running' ? '対局が進行中です' : '対局が終了しました'}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                {twins.map((twin, i) => (
-                  <div key={twin.id} className="p-2 bg-muted rounded">
-                    <span className="text-muted-foreground">
-                      {['東', '南', '西', '北'][i]}:
-                    </span>{' '}
-                    {twin.name}
-                  </div>
-                ))}
-              </div>
+  // When viewMode is null and no actions → set to latest to await realtime
+  useEffect(() => {
+    if (!loading && game && viewMode === null && actions.length === 0) {
+      if (game.status === 'running' || game.status === 'finished') {
+        setViewMode('latest');
+      }
+    }
+  }, [loading, game, viewMode, actions.length]);
 
-              {/* 最終スコア表示（finished時） */}
-              {game.status === 'finished' && game.rule_set?.final_scores && (
-                <div className="p-3 bg-muted rounded">
-                  <p className="text-xs text-muted-foreground mb-2">最終スコア</p>
-                  <div className="grid grid-cols-2 gap-1 text-sm">
-                    {(game.rule_set.final_scores as number[]).map((score, i) => (
-                      <div key={i} className="flex justify-between">
-                        <span>{twins[i]?.name || ['東','南','西','北'][i]}</span>
-                        <span className={score >= 25000 ? 'text-green-400' : 'text-red-400'}>
-                          {score.toLocaleString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <p className="text-sm text-muted-foreground">
-                {actions.length}アクション記録済み
-              </p>
-
-              <div className="flex flex-col gap-2">
-                <Button onClick={watchLive} size="lg" className="w-full">
-                  {game.status === 'running' ? '続きから観戦' : '最新状態を見る'}
-                </Button>
-                <Button onClick={replayFromStart} variant="outline" size="lg" className="w-full">
-                  最初から再生
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </main>
-    );
-  }
-
-  // viewMode が null で actions が 0 の場合 → そのまま観戦開始
+  // If viewMode is still null, show nothing until effect runs
   if (viewMode === null) {
-    setViewMode('latest');
+    return null;
   }
 
   // 観戦画面
   return (
     <main className="min-h-screen flex flex-col">
-      {/* ヘッダー */}
-      <header className="border-b p-3">
+      {/* Compact header */}
+      <header className="border-b px-4 py-2">
         <div className="container mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
-              ← ダッシュボード
-            </Link>
-            <div className="flex items-center gap-2">
-              {twins.map((twin, i) => (
-                <span key={twin.id} className="text-xs">
-                  <span className={['text-red-400','text-blue-400','text-green-400','text-yellow-400'][i]}>
-                    {['東','南','西','北'][i]}
-                  </span>
-                  :{twin.name}
-                </span>
-              ))}
-            </div>
-          </div>
           <div className="flex items-center gap-3">
+            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
+              ← 戻る
+            </Link>
             {game.status === 'running' && (
-              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                 LIVE
               </span>
             )}
             {game.status === 'finished' && (
-              <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">終了</span>
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">終了</span>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs"
-              onClick={() => setViewMode(null)}
-            >
-              モード切替
-            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            {game.status === 'running' && viewMode === 'replay' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs"
+                onClick={watchLive}
+              >
+                LIVE観戦
+              </Button>
+            )}
+            {viewMode === 'latest' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs"
+                onClick={replayFromStart}
+              >
+                最初から
+              </Button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* メインコンテンツ */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* 卓ビュー */}
-        <div className="flex-1 p-4 overflow-auto">
+      {/* MahjongTable - full width with integrated reasoning */}
+      <div className="flex-1 overflow-auto p-4">
+        <div className="container mx-auto max-w-4xl">
           <MahjongTable
             twins={twins}
             actions={actions.slice(0, currentActionIndex + 1)}
             currentAction={actions[currentActionIndex]}
+            currentReasoning={currentReasoning}
             highlightTiles={highlightTiles}
-          />
-        </div>
-
-        {/* 思考ログパネル */}
-        <div className="w-80 border-l overflow-auto">
-          <ReasoningPanel
-            twins={twins}
-            reasonings={currentReasonings}
-            actions={actions.slice(0, currentActionIndex + 1)}
-            onHighlight={handleHighlight}
           />
         </div>
       </div>
 
-      {/* 再生コントロール */}
+      {/* Playback controls - bottom */}
       {actions.length > 0 && (
         <PlaybackControls
           currentIndex={currentActionIndex}

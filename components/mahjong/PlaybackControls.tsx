@@ -31,7 +31,7 @@ export function PlaybackControls({
   onSeek,
   onSpeedChange,
 }: PlaybackControlsProps) {
-  const speeds = [1, 2, 4, 8];
+  const speeds = [0.5, 1, 2, 4];
 
   // 局ごとのアクション開始位置を計算
   const handStartIndices = useMemo(() => {
@@ -157,7 +157,7 @@ export function PlaybackControls({
               variant={playbackSpeed === speed ? 'default' : 'ghost'}
               size="sm"
               onClick={() => onSpeedChange(speed)}
-              className="h-7 w-9 text-xs"
+              className="h-7 min-w-[2.5rem] px-1 text-xs"
             >
               {speed}x
             </Button>
