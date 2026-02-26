@@ -85,13 +85,17 @@ export default function GamePage() {
     loadGame();
   }, [loadGame]);
 
-  // After loading, auto-enter replay mode starting at action 0 when actions exist
+  // After loading, auto-enter replay/latest mode
   useEffect(() => {
-    if (!loading && game && viewMode === null && actions.length > 0) {
+    if (!loading && game && viewMode === null) {
       if (game.status === 'finished' || game.status === 'running') {
-        setViewMode('replay');
-        setCurrentActionIndex(0);
-        setIsPlaying(false);
+        if (actions.length > 0) {
+          setViewMode('replay');
+          setCurrentActionIndex(0);
+          setIsPlaying(false);
+        } else {
+          setViewMode('latest');
+        }
       }
     }
   }, [loading, game, viewMode, actions.length]);
@@ -315,15 +319,6 @@ export default function GamePage() {
       </main>
     );
   }
-
-  // When viewMode is null and no actions → set to latest to await realtime
-  useEffect(() => {
-    if (!loading && game && viewMode === null && actions.length === 0) {
-      if (game.status === 'running' || game.status === 'finished') {
-        setViewMode('latest');
-      }
-    }
-  }, [loading, game, viewMode, actions.length]);
 
   // If viewMode is still null, show nothing until effect runs
   if (viewMode === null) {
