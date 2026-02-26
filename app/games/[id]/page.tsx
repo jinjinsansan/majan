@@ -63,13 +63,22 @@ export default function GamePage() {
 
       setActions(actionsData || []);
 
+      // 思考ログを取得（アクション数が多い場合はチャンク分割で取得）
       if (actionsData && actionsData.length > 0) {
-        const { data: reasoningsData } = await supabase
-          .from('reasoning_logs')
-          .select('*')
-          .in('action_id', actionsData.map(a => a.id));
+        const actionIds = actionsData.map(a => a.id);
+        const CHUNK = 80; // PostgREST URL長制限回避
+        const allReasonings: ReasoningLog[] = [];
 
-        setReasonings(reasoningsData || []);
+        for (let i = 0; i < actionIds.length; i += CHUNK) {
+          const chunk = actionIds.slice(i, i + CHUNK);
+          const { data: reasoningsData } = await supabase
+            .from('reasoning_logs')
+            .select('*')
+            .in('action_id', chunk);
+          if (reasoningsData) allReasonings.push(...reasoningsData);
+        }
+
+        setReasonings(allReasonings);
       }
 
       return gameData;
