@@ -465,14 +465,9 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
           )}
 
           {reasoning.detail_text && (
-            <details className="mt-2">
-              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
-                詳細を見る
-              </summary>
-              <div className="mt-2 p-2 bg-muted/50 rounded text-xs leading-relaxed whitespace-pre-wrap">
-                {reasoning.detail_text}
-              </div>
-            </details>
+            <div className="mt-2 p-2 bg-muted/50 rounded text-xs leading-relaxed whitespace-pre-wrap border-l-2 border-primary/30">
+              {reasoning.detail_text}
+            </div>
           )}
         </div>
       )}

@@ -21,7 +21,7 @@ export default function GamePage() {
   const [reasonings, setReasonings] = useState<ReasoningLog[]>([]);
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(0.5);
+  const [playbackSpeed, setPlaybackSpeed] = useState(0.25);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -185,16 +185,26 @@ export default function GamePage() {
     }
   }, [game?.status, viewMode, id, loadGame]);
 
-  // 自動再生 - speed 0.5 means 1 action every 2 seconds, speed 1 = 1/sec, speed 2 = 2/sec, etc.
+  // 自動再生 - 打牌・鳴き等はゆっくり、配牌・ツモは高速スキップ
   useEffect(() => {
     if (!isPlaying || currentActionIndex >= actions.length - 1) {
       setIsPlaying(false);
       return;
     }
 
+    // 次のアクションのタイプに応じて待ち時間を決定
+    const nextAction = actions[currentActionIndex + 1];
+    const currentAction = actions[currentActionIndex];
+    const actionType = currentAction?.action_type;
+
+    // deal/draw は読む必要がないので高速スキップ（100ms）
+    // discard/pon/chi/kan/riichi/tsumo(和了)/ron/ryukyoku はじっくり見せる
+    const isQuickAction = actionType === 'deal' || actionType === 'draw';
+    const delay = isQuickAction ? 100 : (1000 / playbackSpeed);
+
     const timer = setTimeout(() => {
       setCurrentActionIndex(prev => Math.min(prev + 1, actions.length - 1));
-    }, 1000 / playbackSpeed);
+    }, delay);
 
     return () => clearTimeout(timer);
   }, [isPlaying, currentActionIndex, actions.length, playbackSpeed]);
