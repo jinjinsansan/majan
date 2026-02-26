@@ -1149,49 +1149,11 @@ function buildHeuristicReasoning(
   return { summary, detail, mode, risk };
 }
 
-// ─── アクション＋思考ログ保存ヘルパー ───────────────────────
-async function saveActionWithReasoning(
-  supabase: any,
-  action: {
-    game_id: string;
-    hand_id: string;
-    seq_no: number;
-    actor_seat: number;
-    action_type: string;
-    payload_json: any;
-  },
-  reasoning?: {
-    summary_text: string;
-    detail_text: string | null;
-    structured_json: any;
-    tokens_used: number;
-    model_name: string;
-  },
-) {
-  if (reasoning) {
-    // アクション + selectでIDを取得 → 思考ログ挿入
-    const { data: inserted } = await supabase
-      .from('actions')
-      .insert(action)
-      .select('id')
-      .single();
-
-    if (inserted) {
-      await supabase.from('reasoning_logs').insert({
-        action_id: inserted.id,
-        ...reasoning,
-      });
-    }
-  } else {
-    // 思考ログ不要の場合はIDを返す必要なし
-    await supabase.from('actions').insert(action);
-  }
-}
-
 /**
  * 対局実行メインループ
  * 東風戦: 東1局〜東4局 (親連荘あり)
- * 全判断ヒューリスティック（LLMなし）で55秒内完走
+ * 全判断ヒューリスティック（LLMなし）
+ * バッチDB書き込み: 局ごとにまとめて一括INSERT（~260回→2回/局に削減）
  */
 async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const engine = new MahjongEngine();
@@ -1199,11 +1161,42 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 55000;
 
+  // ─── バッチ書き込みバッファ ─────────────────────────────────
+  const pendingActions: any[] = [];
+  const pendingReasonings: any[] = [];
+
+  /** バッファをDBにフラッシュ */
+  async function flushBatch() {
+    if (pendingActions.length > 0) {
+      await supabase.from('actions').insert(pendingActions);
+      pendingActions.length = 0;
+    }
+    if (pendingReasonings.length > 0) {
+      await supabase.from('reasoning_logs').insert(pendingReasonings);
+      pendingReasonings.length = 0;
+    }
+  }
+
+  /** アクション（+思考ログ）をバッファに追加。クライアント側UUID生成でID紐付け */
+  function queueAction(
+    action: { game_id: string; hand_id: string; seq_no: number; actor_seat: number; action_type: string; payload_json: any },
+    reasoning?: { summary_text: string; detail_text: string | null; structured_json: any; tokens_used: number; model_name: string },
+  ) {
+    if (reasoning) {
+      const actionId = crypto.randomUUID();
+      pendingActions.push({ id: actionId, ...action });
+      pendingReasonings.push({ action_id: actionId, ...reasoning });
+    } else {
+      pendingActions.push(action);
+    }
+  }
+
   try {
     // === 東風戦ループ（最大4局 + 親連荘） ===
     while (!engine.isGameOver()) {
       if (Date.now() - startTime > MAX_RUNTIME_MS) {
-        console.log('Timeout reached, finishing game');
+        console.log('Timeout reached, flushing remaining actions');
+        await flushBatch();
         break;
       }
 
@@ -1226,12 +1219,11 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       if (handError) throw handError;
       const handId = hand.id;
 
-      // 配牌を一括記録（deal アクションには思考ログ不要）
+      // 配牌をバッファに追加
       const initState = engine.getState();
-      const dealActions = [];
       for (let seat = 0; seat < 4; seat++) {
         seqNo++;
-        dealActions.push({
+        queueAction({
           game_id: gameId,
           hand_id: handId,
           seq_no: seqNo,
@@ -1243,7 +1235,6 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           },
         });
       }
-      await supabase.from('actions').insert(dealActions);
 
       // === 局内ループ ===
       let handOver = false;
@@ -1265,16 +1256,10 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           if (engine.isRyukyoku()) {
             handResult = engine.processRyukyoku();
             seqNo++;
-            await supabase.from('actions').insert({
-              game_id: gameId,
-              hand_id: handId,
-              seq_no: seqNo,
-              actor_seat: currentSeat,
+            queueAction({
+              game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
               action_type: 'ryukyoku',
-              payload_json: {
-                tenpai_seats: handResult.tenpaiSeats,
-                score_changes: handResult.scoreChanges,
-              },
+              payload_json: { tenpai_seats: handResult.tenpaiSeats, score_changes: handResult.scoreChanges },
             });
             handOver = true;
             break;
@@ -1287,15 +1272,11 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             break;
           }
 
-          // ツモアクション（思考ログ不要）
+          // ツモアクション
           seqNo++;
-          await supabase.from('actions').insert({
-            game_id: gameId,
-            hand_id: handId,
-            seq_no: seqNo,
-            actor_seat: currentSeat,
-            action_type: 'draw',
-            payload_json: { tile: drawnTile },
+          queueAction({
+            game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
+            action_type: 'draw', payload_json: { tile: drawnTile },
           });
 
           // ツモ和了チェック
@@ -1304,34 +1285,17 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             if (winResult) {
               const yakuNames = winResult.yaku.map(([name, han]: [string, number]) => `${name}(${han}翻)`).join('・');
               seqNo++;
-              await saveActionWithReasoning(supabase, {
-                game_id: gameId,
-                hand_id: handId,
-                seq_no: seqNo,
-                actor_seat: currentSeat,
+              queueAction({
+                game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
                 action_type: 'tsumo',
-                payload_json: {
-                  tile: drawnTile,
-                  yaku: winResult.yaku,
-                  han: winResult.han,
-                  fu: winResult.fu,
-                  score_level: winResult.scoreLevel,
-                  score_changes: winResult.scoreChanges,
-                },
+                payload_json: { tile: drawnTile, yaku: winResult.yaku, han: winResult.han, fu: winResult.fu, score_level: winResult.scoreLevel, score_changes: winResult.scoreChanges },
               }, {
                 summary_text: `ツモ和了！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                 detail_text: `ツモ牌: ${tileToName(drawnTile)}\n役: ${yakuNames}\n${winResult.han}翻${winResult.fu}符\n${winResult.scoreLevel}`,
                 structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
-                tokens_used: 0,
-                model_name: 'engine',
+                tokens_used: 0, model_name: 'engine',
               });
-
-              handResult = {
-                type: 'agari',
-                winResult,
-                scoreChanges: winResult.scoreChanges,
-                dealerRetains: winResult.winnerSeat === engine.getDealerSeat(),
-              };
+              handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
               handOver = true;
               break;
             }
@@ -1349,19 +1313,14 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
               if (success) {
                 const kanMeld = engine.getState().players[currentSeat].melds.slice(-1)[0];
                 seqNo++;
-                await saveActionWithReasoning(supabase, {
-                  game_id: gameId,
-                  hand_id: handId,
-                  seq_no: seqNo,
-                  actor_seat: currentSeat,
-                  action_type: 'kan',
-                  payload_json: { kan_type: 'ankan', tiles: kanMeld?.tiles || [] },
+                queueAction({
+                  game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
+                  action_type: 'kan', payload_json: { kan_type: 'ankan', tiles: kanMeld?.tiles || [] },
                 }, {
                   summary_text: `${twin?.name || '???'}が${tileToName(ankanTile)}を暗槓！手牌から4枚揃い。`,
                   detail_text: null,
                   structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: [], is_naki_decision: true },
-                  tokens_used: 0,
-                  model_name: 'engine',
+                  tokens_used: 0, model_name: 'engine',
                 });
 
                 // 嶺上ツモ和了チェック
@@ -1370,7 +1329,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                   if (winResult) {
                     const yakuNames = winResult.yaku.map(([name, han]: [string, number]) => `${name}(${han}翻)`).join('・');
                     seqNo++;
-                    await saveActionWithReasoning(supabase, {
+                    queueAction({
                       game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
                       action_type: 'tsumo',
                       payload_json: { yaku: winResult.yaku, han: winResult.han, fu: winResult.fu, score_level: winResult.scoreLevel, score_changes: winResult.scoreChanges, rinshan: true },
@@ -1396,12 +1355,11 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
               const kakanTile = kakanCandidates[0];
               const success = engine.executeKakan(currentSeat, kakanTile);
               if (success) {
-                const kanMeld = engine.getState().players[currentSeat].melds.find(m => m.type === 'kakan');
+                const kanMeld = engine.getState().players[currentSeat].melds.find((m: any) => m.type === 'kakan');
                 seqNo++;
-                await saveActionWithReasoning(supabase, {
+                queueAction({
                   game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
-                  action_type: 'kan',
-                  payload_json: { kan_type: 'kakan', tile: kakanTile, tiles: kanMeld?.tiles || [] },
+                  action_type: 'kan', payload_json: { kan_type: 'kakan', tile: kakanTile, tiles: kanMeld?.tiles || [] },
                 }, {
                   summary_text: `${twin?.name || '???'}が${tileToName(kakanTile)}を加槓！`,
                   detail_text: null,
@@ -1412,11 +1370,17 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                 if (engine.canTsumo(currentSeat)) {
                   const winResult = engine.executeTsumo(currentSeat);
                   if (winResult) {
+                    const yakuNames = winResult.yaku.map(([name, han]: [string, number]) => `${name}(${han}翻)`).join('・');
                     seqNo++;
-                    await supabase.from('actions').insert({
+                    queueAction({
                       game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
                       action_type: 'tsumo',
                       payload_json: { yaku: winResult.yaku, han: winResult.han, fu: winResult.fu, score_level: winResult.scoreLevel, score_changes: winResult.scoreChanges, rinshan: true },
+                    }, {
+                      summary_text: `嶺上開花！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
+                      detail_text: null,
+                      structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                      tokens_used: 0, model_name: 'engine',
                     });
                     handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
                     handOver = true;
@@ -1459,7 +1423,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             engine.executeRiichi(currentSeat, chosenTile);
             isRiichi = true;
             seqNo++;
-            await supabase.from('actions').insert({
+            queueAction({
               game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
               action_type: 'riichi', payload_json: { tile: chosenTile },
             });
@@ -1469,26 +1433,18 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
 
           // 打牌アクション + 思考ログ
           seqNo++;
-          await saveActionWithReasoning(supabase, {
-            game_id: gameId,
-            hand_id: handId,
-            seq_no: seqNo,
-            actor_seat: currentSeat,
-            action_type: 'discard',
-            payload_json: { tile: chosenTile },
+          queueAction({
+            game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: currentSeat,
+            action_type: 'discard', payload_json: { tile: chosenTile },
           }, {
             summary_text: reasoning.summary,
             detail_text: reasoning.detail,
             structured_json: {
-              risk: reasoning.risk,
-              mode: reasoning.mode,
-              candidates: [],
-              target_yaku: [],
-              shanten: hResult.shanten,
-              ukeire_count: hResult.ukeireCount,
+              risk: reasoning.risk, mode: reasoning.mode,
+              candidates: [], target_yaku: [],
+              shanten: hResult.shanten, ukeire_count: hResult.ukeireCount,
             },
-            tokens_used: 0,
-            model_name: 'heuristic',
+            tokens_used: 0, model_name: 'heuristic',
           });
 
           // === 鳴き・ロンチェック ===
@@ -1503,21 +1459,16 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             if (winResult) {
               const yakuNames = winResult.yaku.map(([name, han]: [string, number]) => `${name}(${han}翻)`).join('・');
               seqNo++;
-              await saveActionWithReasoning(supabase, {
+              queueAction({
                 game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: ronSeat,
                 action_type: 'ron',
-                payload_json: {
-                  tile: discardedTile, from_seat: discarderSeat,
-                  yaku: winResult.yaku, han: winResult.han, fu: winResult.fu,
-                  score_level: winResult.scoreLevel, score_changes: winResult.scoreChanges,
-                },
+                payload_json: { tile: discardedTile, from_seat: discarderSeat, yaku: winResult.yaku, han: winResult.han, fu: winResult.fu, score_level: winResult.scoreLevel, score_changes: winResult.scoreChanges },
               }, {
                 summary_text: `ロン！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                 detail_text: `ロン牌: ${tileToName(discardedTile)} (${twins[discarderSeat]?.name}から)\n役: ${yakuNames}\n${winResult.han}翻${winResult.fu}符`,
                 structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
                 tokens_used: 0, model_name: 'engine',
               });
-
               handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
               handOver = true;
               break;
@@ -1539,7 +1490,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                   if (success) {
                     const kanMeld = engine.getState().players[kanSeat].melds.slice(-1)[0];
                     seqNo++;
-                    await saveActionWithReasoning(supabase, {
+                    queueAction({
                       game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: kanSeat,
                       action_type: 'kan',
                       payload_json: { kan_type: 'daiminkan', tile: discardedTile, tiles: kanMeld?.tiles || [], from_seat: discarderSeat },
@@ -1553,11 +1504,17 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                     if (engine.canTsumo(kanSeat)) {
                       const winResult = engine.executeTsumo(kanSeat);
                       if (winResult) {
+                        const yakuNames = winResult.yaku.map(([name, han]: [string, number]) => `${name}(${han}翻)`).join('・');
                         seqNo++;
-                        await supabase.from('actions').insert({
+                        queueAction({
                           game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: kanSeat,
                           action_type: 'tsumo',
                           payload_json: { yaku: winResult.yaku, han: winResult.han, fu: winResult.fu, score_level: winResult.scoreLevel, score_changes: winResult.scoreChanges, rinshan: true },
+                        }, {
+                          summary_text: `嶺上開花！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
+                          detail_text: null,
+                          structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                          tokens_used: 0, model_name: 'engine',
                         });
                         handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
                         handOver = true;
@@ -1581,7 +1538,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                   if (success) {
                     const ponMeld = engine.getState().players[ponSeat].melds.slice(-1)[0];
                     seqNo++;
-                    await saveActionWithReasoning(supabase, {
+                    queueAction({
                       game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: ponSeat,
                       action_type: 'pon',
                       payload_json: { tile: discardedTile, tiles: ponMeld?.tiles || [discardedTile], from_seat: discarderSeat },
@@ -1611,7 +1568,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                     if (success) {
                       const chiMeld = engine.getState().players[nextSeat].melds.slice(-1)[0];
                       seqNo++;
-                      await saveActionWithReasoning(supabase, {
+                      queueAction({
                         game_id: gameId, hand_id: handId, seq_no: seqNo, actor_seat: nextSeat,
                         action_type: 'chi',
                         payload_json: { tile: discardedTile, tiles: chiMeld?.tiles || chiOptions[0], from_seat: discarderSeat },
@@ -1634,6 +1591,9 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           }
         }
       }
+
+      // === 局終了: バッファをフラッシュ ===
+      await flushBatch();
 
       // 局結果を保存
       if (handResult) {
@@ -1661,6 +1621,9 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       }
     }
 
+    // ゲーム終了前に残りをフラッシュ
+    await flushBatch();
+
     // ゲーム終了
     const finalState = engine.getState();
     await supabase
@@ -1684,6 +1647,8 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
 
   } catch (error) {
     console.error('Game execution error:', error);
+    // エラー時もバッファフラッシュ試行
+    try { await flushBatch(); } catch {}
     await supabase
       .from('games')
       .update({ status: 'failed' })
