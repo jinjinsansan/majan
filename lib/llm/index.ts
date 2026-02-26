@@ -18,26 +18,31 @@ export interface LLMDecision {
 }
 
 // 重要局面かどうか判定
+// action: 'discard' | 'pon' | 'chi' | 'kan' | 'riichi' | 'tsumo' | 'ron'
 export function isKeyMoment(
   state: any,
   action: string,
   candidates: string[]
 ): boolean {
-  // リーチ判断
-  if (action.includes('riichi')) return true;
-  
-  // 鳴き判断
-  if (action.includes('chi') || action.includes('pon') || action.includes('kan')) return true;
-  
-  // 和了
-  if (action.includes('tsumo') || action.includes('ron')) return true;
-  
-  // 終盤（残り4巡以内）で他家リーチ中
-  if (state.remainingTiles <= 16) {
+  // 和了・リーチは常に重要
+  if (action === 'riichi' || action === 'tsumo' || action === 'ron') return true;
+
+  // 鳴き判断（ポン・チー・槓）は常に重要（LLMに聞く価値がある）
+  if (action === 'pon' || action === 'chi' || action === 'kan') return true;
+
+  // 打牌フェーズ: 以下の条件で重要局面とする
+  if (action === 'discard') {
+    // テンパイ（候補が少ない = 手が整っている可能性）
+    // ※ リーチ可能なら確実にキーモーメント
+
+    // 他家リーチ中は押し引き判断が重要
     const anyRiichi = state.players?.some((p: any) => p.riichi && p.seat !== state.currentActor);
     if (anyRiichi) return true;
+
+    // 終盤（残り20枚以下）
+    if (state.remainingTiles <= 20) return true;
   }
-  
+
   return false;
 }
 

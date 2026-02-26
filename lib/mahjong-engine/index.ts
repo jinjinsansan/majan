@@ -1273,6 +1273,62 @@ export class MahjongEngine {
     return Array.from(tiles);
   }
 
+  /**
+   * ヒューリスティック打牌選択（LLM不使用）
+   * シャンテン数を最小化する牌を選択する。
+   * 同シャンテンの場合は受入枚数が多い方を優先。
+   */
+  chooseBestDiscardHeuristic(seat: number): string {
+    const player = this.players[seat];
+    const allTiles = [...player.hand];
+    if (player.tsumo) allTiles.push(player.tsumo);
+
+    const candidates = this.getDiscardCandidates(seat);
+    let bestTile = candidates[0];
+    let bestShanten = 99;
+    let bestUkeireCount = -1;
+
+    for (const tile of candidates) {
+      // この牌を切った後の手牌
+      const remaining = [...allTiles];
+      const idx = remaining.indexOf(tile);
+      if (idx >= 0) remaining.splice(idx, 1);
+
+      try {
+        const kindIds = handToKindIds(remaining);
+        const exposed = player.melds.map(m => meldToLibMentsu(m));
+        const tehai = { closed: kindIds, exposed } as unknown as Tehai13;
+        assertTehai13(tehai);
+        const shanten = calculateShanten(tehai);
+
+        if (shanten < bestShanten) {
+          bestShanten = shanten;
+          bestTile = tile;
+          // 受入枚数も計算
+          try {
+            const ukeire = getUkeire(tehai);
+            bestUkeireCount = ukeire.length;
+          } catch {
+            bestUkeireCount = 0;
+          }
+        } else if (shanten === bestShanten) {
+          // 同シャンテンなら受入枚数で比較
+          try {
+            const ukeire = getUkeire(tehai);
+            if (ukeire.length > bestUkeireCount) {
+              bestUkeireCount = ukeire.length;
+              bestTile = tile;
+            }
+          } catch { /* keep current best */ }
+        }
+      } catch {
+        // パース失敗時はスキップ
+      }
+    }
+
+    return bestTile;
+  }
+
   /** ロン可能なプレイヤー一覧（頭ハネ順） */
   getRonCandidates(discardedTile: string, discarderSeat: number): number[] {
     const candidates: number[] = [];

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { MahjongEngine, tileToName } from '@/lib/mahjong-engine';
-import { decide, decideNaki } from '@/lib/llm';
+import { decide, decideNaki, isKeyMoment } from '@/lib/llm';
 import type { Twin } from '@/lib/types';
 
 export const maxDuration = 60; // Vercel Pro: 60秒まで
@@ -115,11 +115,12 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
       if (handError) throw handError;
       const handId = hand.id;
 
-      // 配牌をアクションとして記録
+      // 配牌をアクションとして一括記録
       const initState = engine.getState();
+      const dealActions = [];
       for (let seat = 0; seat < 4; seat++) {
         seqNo++;
-        await supabase.from('actions').insert({
+        dealActions.push({
           game_id: gameId,
           hand_id: handId,
           seq_no: seqNo,
@@ -131,6 +132,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           },
         });
       }
+      await supabase.from('actions').insert(dealActions);
 
       // === 局内ループ ===
       let handOver = false;
@@ -425,7 +427,12 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
           const canRiichi = engine.canRiichi(currentSeat);
           const riichiCandidates = canRiichi ? engine.getRiichiDiscardCandidates(currentSeat) : [];
 
-          if (useLLM && twin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
+          // 重要局面判定: LLMはキーモーメントのみ使用
+          // リーチ可能時は常に重要局面
+          const keyMoment = canRiichi || isKeyMoment(updatedState, 'discard', candidates);
+          const shouldUseLLM = useLLM && twin && keyMoment && totalTokensUsed < MAX_TOKENS_PER_GAME;
+
+          if (shouldUseLLM) {
             try {
               const allHands = updatedState.players.map(p => ({
                 hand: p.hand.map(t => tileToName(t)),
@@ -462,14 +469,20 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
               };
             } catch (llmError) {
               console.error('LLM error:', llmError);
-              chosenTile = candidates[Math.floor(Math.random() * candidates.length)];
+              chosenTile = engine.chooseBestDiscardHeuristic(currentSeat);
               reasoning.summary = `${twin?.name || '???'}が${tileToName(chosenTile)}を切った。`;
-              reasoning.model = 'fallback';
+              reasoning.model = 'heuristic';
             }
           } else {
-            chosenTile = candidates[Math.floor(Math.random() * candidates.length)];
+            // ヒューリスティック: シャンテン数最小化で打牌選択
+            chosenTile = engine.chooseBestDiscardHeuristic(currentSeat);
+            // リーチ可能で、ヒューリスティックが選んだ牌がリーチ候補でない場合、
+            // リーチ候補の最初の牌を選ぶ（リーチは基本的に有利）
+            if (canRiichi && riichiCandidates.length > 0 && !riichiCandidates.includes(chosenTile)) {
+              chosenTile = riichiCandidates[0];
+            }
             reasoning.summary = `${twin?.name || '???'}が${tileToName(chosenTile)}を切った。`;
-            reasoning.model = 'random';
+            reasoning.model = 'heuristic';
           }
 
           // リーチ実行（テンパイかつリーチ可能な牌を切る場合）
@@ -663,7 +676,9 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                 const ponTwin = twins[ponSeat];
                 let shouldPon = false;
 
-                if (useLLM && ponTwin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
+                // 鳴き判断もキーモーメントのみLLM使用
+                const ponKeyMoment = isKeyMoment(engine.getState(), 'pon', [discardedTile]);
+                if (useLLM && ponTwin && ponKeyMoment && totalTokensUsed < MAX_TOKENS_PER_GAME) {
                   try {
                     const nakiDecision = await decideNaki(
                       ponTwin,
@@ -675,7 +690,6 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                     shouldPon = nakiDecision.shouldCall;
                     totalTokensUsed += 100; // 鳴き判断の概算トークン
                   } catch {
-                    // NPC style_params based fallback
                     const nakiTendency = ponTwin.style_params?.naki_tendency ?? 50;
                     shouldPon = Math.random() * 100 < nakiTendency;
                   }
@@ -734,7 +748,9 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                 const chiTwin = twins[nextSeat];
                 let shouldChi = false;
 
-                if (useLLM && chiTwin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
+                // チー判断もキーモーメントのみLLM使用
+                const chiKeyMoment = isKeyMoment(engine.getState(), 'chi', [discardedTile]);
+                if (useLLM && chiTwin && chiKeyMoment && totalTokensUsed < MAX_TOKENS_PER_GAME) {
                   try {
                     const nakiDecision = await decideNaki(
                       chiTwin,
@@ -747,7 +763,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                     totalTokensUsed += 100; // 鳴き判断の概算トークン
                   } catch {
                     const nakiTendency = chiTwin.style_params?.naki_tendency ?? 50;
-                    shouldChi = Math.random() * 100 < nakiTendency * 0.7; // チーはポンより控えめ
+                    shouldChi = Math.random() * 100 < nakiTendency * 0.7;
                   }
                 } else {
                   const nakiTendency = chiTwin?.style_params?.naki_tendency ?? 50;
