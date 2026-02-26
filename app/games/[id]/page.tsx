@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { createClient } from '@/lib/supabase/client';
 import { MahjongTable } from '@/components/mahjong/MahjongTable';
 import { PlaybackControls } from '@/components/mahjong/PlaybackControls';
+import { PlayerAvatar } from '@/components/mahjong/PlayerAvatar';
 import type { Game, Twin, Action, ReasoningLog } from '@/lib/types';
 
 type ViewMode = 'latest' | 'replay';
@@ -28,6 +29,9 @@ export default function GamePage() {
   const [viewMode, setViewMode] = useState<ViewMode | null>(null);
   const [highlightTiles, setHighlightTiles] = useState<string[]>([]);
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null);
+
+  const seatNames = ['東', '南', '西', '北'];
+  const seatColors = ['text-red-400', 'text-blue-400', 'text-green-400', 'text-yellow-400'];
 
   // ゲームデータを読み込む
   const loadGame = useCallback(async () => {
@@ -63,10 +67,9 @@ export default function GamePage() {
 
       setActions(actionsData || []);
 
-      // 思考ログを取得（アクション数が多い場合はチャンク分割で取得）
       if (actionsData && actionsData.length > 0) {
         const actionIds = actionsData.map(a => a.id);
-        const CHUNK = 80; // PostgREST URL長制限回避
+        const CHUNK = 80;
         const allReasonings: ReasoningLog[] = [];
 
         for (let i = 0; i < actionIds.length; i += CHUNK) {
@@ -109,19 +112,17 @@ export default function GamePage() {
     }
   }, [loading, game, viewMode, actions.length]);
 
-  // Supabase Realtime（running中 & 続きから観戦モード）
+  // Supabase Realtime
   useEffect(() => {
     if (game?.status === 'running' && viewMode === 'latest') {
       const supabase = createClient();
 
-      // 既存チャネルをクリーンアップ
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
       }
 
       const channel = supabase
         .channel(`game-${id}`)
-        // アクション追加をリアルタイム受信
         .on(
           'postgres_changes',
           {
@@ -133,14 +134,12 @@ export default function GamePage() {
           async (payload) => {
             const newAction = payload.new as Action;
             setActions(prev => {
-              // 重複防止
               if (prev.some(a => a.id === newAction.id)) return prev;
               const updated = [...prev, newAction].sort((a, b) => a.seq_no - b.seq_no);
               setCurrentActionIndex(updated.length - 1);
               return updated;
             });
 
-            // 対応する思考ログを取得
             const { data: reasoningData } = await supabase
               .from('reasoning_logs')
               .select('*')
@@ -155,7 +154,6 @@ export default function GamePage() {
             }
           }
         )
-        // ゲームステータス変更をリアルタイム受信
         .on(
           'postgres_changes',
           {
@@ -168,7 +166,6 @@ export default function GamePage() {
             const updated = payload.new as Game;
             setGame(prev => prev ? { ...prev, ...updated } : null);
 
-            // ゲーム終了時にフルリロード
             if (updated.status === 'finished' || updated.status === 'failed') {
               await loadGame();
             }
@@ -185,20 +182,15 @@ export default function GamePage() {
     }
   }, [game?.status, viewMode, id, loadGame]);
 
-  // 自動再生 - 打牌・鳴き等はゆっくり、配牌・ツモは高速スキップ
+  // 自動再生
   useEffect(() => {
     if (!isPlaying || currentActionIndex >= actions.length - 1) {
       setIsPlaying(false);
       return;
     }
 
-    // 次のアクションのタイプに応じて待ち時間を決定
-    const nextAction = actions[currentActionIndex + 1];
     const currentAction = actions[currentActionIndex];
     const actionType = currentAction?.action_type;
-
-    // deal/draw は読む必要がないので高速スキップ（100ms）
-    // discard/pon/chi/kan/riichi/tsumo(和了)/ron/ryukyoku はじっくり見せる
     const isQuickAction = actionType === 'deal' || actionType === 'draw';
     const delay = isQuickAction ? 100 : (1000 / playbackSpeed);
 
@@ -244,32 +236,27 @@ export default function GamePage() {
     }
   };
 
-  // 「続きから観戦」
   const watchLive = () => {
     setViewMode('latest');
     setCurrentActionIndex(Math.max(0, actions.length - 1));
     setIsPlaying(false);
   };
 
-  // 「最初から再生」
   const replayFromStart = () => {
     setViewMode('replay');
     setCurrentActionIndex(0);
     setIsPlaying(false);
   };
 
-  // Find reasoning for the current action
   const currentReasoning = actions[currentActionIndex]
     ? reasonings.find(r => r.action_id === actions[currentActionIndex].id) || null
     : null;
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
+      <main className="flex min-h-screen items-center justify-center bg-felt">
         <div className="text-center">
-          <div className="text-4xl mb-4">
-            <span role="img" aria-label="mahjong">&#x1F004;</span>
-          </div>
+          <div className="text-4xl mb-4 animate-pulse">🀄</div>
           <p className="text-muted-foreground">読み込み中...</p>
         </div>
       </main>
@@ -278,8 +265,8 @@ export default function GamePage() {
 
   if (error && !game) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
-        <Card className="max-w-md">
+      <main className="flex min-h-screen items-center justify-center bg-felt">
+        <Card className="max-w-md bg-card/80 backdrop-blur-sm">
           <CardContent className="pt-6 text-center">
             <p className="text-destructive mb-4">{error}</p>
             <Link href="/dashboard">
@@ -296,33 +283,43 @@ export default function GamePage() {
   // queued 状態 → 対局準備画面
   if (game.status === 'queued') {
     return (
-      <main className="min-h-screen flex flex-col">
-        <header className="border-b p-2 sm:p-4">
+      <main className="min-h-screen flex flex-col bg-felt tile-pattern">
+        <header className="border-b border-border/30 p-2 sm:p-4">
           <div className="container mx-auto">
             <Link href="/dashboard" className="text-xs sm:text-sm text-muted-foreground hover:text-foreground">
               ← ダッシュボード
             </Link>
-            <h1 className="text-lg sm:text-xl font-semibold mt-1">対局準備中</h1>
+            <h1 className="text-lg sm:text-xl font-bold mt-1">
+              <span className="text-gold">対局</span>準備中
+            </h1>
           </div>
         </header>
         <div className="flex-1 flex items-center justify-center p-4">
-          <Card className="max-w-md w-full text-center p-4 sm:p-8">
+          <Card className="max-w-md w-full text-center p-4 sm:p-8 bg-card/80 backdrop-blur-sm">
             <CardHeader>
-              <CardTitle>対局準備完了</CardTitle>
+              <CardTitle className="text-xl">対局準備完了</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-2 text-sm">
+              {/* プレイヤーカード（アバター付き） */}
+              <div className="grid grid-cols-2 gap-3">
                 {twins.map((twin, i) => (
-                  <div key={twin.id} className="p-2 bg-muted rounded">
-                    <span className="text-muted-foreground">
-                      {['東', '南', '西', '北'][i]}:
-                    </span>{' '}
-                    {twin.name}
+                  <div key={twin.id} className="flex items-center gap-2 p-2.5 bg-muted/30 rounded-lg border border-border/30">
+                    <PlayerAvatar
+                      avatarUrl={twin.avatar_url}
+                      name={twin.name}
+                      seatWind={seatNames[i]}
+                      seatColor={seatColors[i]}
+                      size="sm"
+                    />
+                    <div className="min-w-0">
+                      <p className={`text-xs font-medium ${seatColors[i]}`}>{seatNames[i]}</p>
+                      <p className="text-sm truncate">{twin.name}</p>
+                    </div>
                   </div>
                 ))}
               </div>
-              <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-400">
-                この対局は公開手牌ルールです。全プレイヤーの手牌が常に表示されます。
+              <div className="p-3 bg-yellow-500/5 border border-yellow-500/20 rounded-lg text-xs text-yellow-400/80">
+                公開手牌ルール: 全プレイヤーの手牌が表示されます
               </div>
               {error && (
                 <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
@@ -339,49 +336,38 @@ export default function GamePage() {
     );
   }
 
-  // If viewMode is still null, show nothing until effect runs
   if (viewMode === null) {
     return null;
   }
 
   // 観戦画面
   return (
-    <main className="min-h-screen flex flex-col">
-      {/* Compact header */}
-      <header className="border-b px-2 sm:px-4 py-1.5 sm:py-2">
+    <main className="min-h-screen flex flex-col bg-felt">
+      {/* ヘッダー */}
+      <header className="border-b border-border/30 px-2 sm:px-4 py-1.5 sm:py-2">
         <div className="container mx-auto flex justify-between items-center">
           <div className="flex items-center gap-2 sm:gap-3">
             <Link href="/dashboard" className="text-xs sm:text-sm text-muted-foreground hover:text-foreground">
               ← 戻る
             </Link>
             {game.status === 'running' && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 text-xs">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                LIVE
+                <span className="text-green-400 font-medium">LIVE</span>
               </span>
             )}
             {game.status === 'finished' && (
-              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">終了</span>
+              <span className="text-[10px] sm:text-xs text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">終了</span>
             )}
           </div>
           <div className="flex items-center gap-2">
             {game.status === 'running' && viewMode === 'replay' && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-                onClick={watchLive}
-              >
+              <Button variant="ghost" size="sm" className="text-xs text-green-400" onClick={watchLive}>
                 LIVE観戦
               </Button>
             )}
             {viewMode === 'latest' && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-                onClick={replayFromStart}
-              >
+              <Button variant="ghost" size="sm" className="text-xs" onClick={replayFromStart}>
                 最初から
               </Button>
             )}
@@ -389,9 +375,9 @@ export default function GamePage() {
         </div>
       </header>
 
-      {/* MahjongTable - full width with integrated reasoning */}
+      {/* MahjongTable */}
       <div className="flex-1 overflow-auto p-1.5 sm:p-4">
-        <div className="container mx-auto max-w-4xl">
+        <div className="container mx-auto max-w-5xl">
           <MahjongTable
             twins={twins}
             actions={actions.slice(0, currentActionIndex + 1)}
@@ -402,7 +388,7 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Playback controls - bottom */}
+      {/* プレイバック */}
       {actions.length > 0 && (
         <PlaybackControls
           currentIndex={currentActionIndex}

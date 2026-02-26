@@ -86,29 +86,27 @@ export function PlaybackControls({
     return 0;
   }, [currentIndex, handStartIndices]);
 
-  // 次の重要局面へジャンプ
   const jumpToNextKeyMoment = () => {
     const next = keyMoments.find(m => m.index > currentIndex);
     if (next) onSeek(next.index);
   };
 
-  // 前の重要局面へジャンプ
   const jumpToPrevKeyMoment = () => {
     const prev = [...keyMoments].reverse().find(m => m.index < currentIndex);
     if (prev) onSeek(prev.index);
   };
 
   return (
-    <div className="border-t bg-card p-2 sm:p-3">
+    <div className="border-t border-border/30 bg-card/80 backdrop-blur-sm p-2 sm:p-3">
       <div className="container mx-auto flex flex-col gap-2 sm:gap-0 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-        {/* Row 1 (mobile): Play controls + speed + seek bar */}
+        {/* Row 1: 再生コントロール + 速度 + シークバー */}
         <div className="flex items-center gap-2 w-full sm:w-auto sm:contents">
           {/* 再生コントロール */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8"
+              className="h-8 w-8 border-border/50"
               onClick={onPrev}
               disabled={currentIndex === 0}
               title="1手戻る"
@@ -142,7 +140,7 @@ export function PlaybackControls({
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8"
+              className="h-8 w-8 border-border/50"
               onClick={onNext}
               disabled={currentIndex >= totalActions - 1}
               title="1手進む"
@@ -174,7 +172,7 @@ export function PlaybackControls({
               max={Math.max(0, totalActions - 1)}
               value={currentIndex}
               onChange={(e) => onSeek(parseInt(e.target.value))}
-              className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer min-w-[60px]"
+              className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer min-w-[60px] accent-primary"
             />
             <span className="text-[10px] sm:text-xs text-muted-foreground whitespace-nowrap">
               {currentIndex + 1}/{totalActions}
@@ -182,7 +180,7 @@ export function PlaybackControls({
           </div>
         </div>
 
-        {/* Row 2 (mobile): Hand jump + key moments */}
+        {/* Row 2: 局ジャンプ + 重要局面 */}
         <div className="flex items-center gap-2 w-full sm:w-auto sm:contents">
           {/* 局ジャンプ */}
           <div className="flex items-center gap-0.5">

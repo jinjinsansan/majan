@@ -2,7 +2,9 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { PlayerSeat } from './PlayerSeat';
+import { PlayerAvatar } from './PlayerAvatar';
 import { MahjongTile } from './MahjongTile';
+import { ThoughtBubble } from './ThoughtBubble';
 import { tileToDisplay } from './tile-utils';
 import type { Twin, Action, ReasoningLog } from '@/lib/types';
 
@@ -230,6 +232,14 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
   const seatNames = ['東', '南', '西', '北'];
   const seatColors = ['text-red-400', 'text-blue-400', 'text-green-400', 'text-yellow-400'];
   const isMobile = useIsMobile();
+  const [activeTab, setActiveTab] = useState(0);
+
+  // モバイルでは現在のアクターに自動切替
+  useEffect(() => {
+    if (isMobile && currentAction) {
+      setActiveTab(currentAction.actor_seat);
+    }
+  }, [isMobile, currentAction]);
 
   // Build action description text
   const actionText = useMemo(() => {
@@ -275,6 +285,7 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
         label: 'ツモ!',
         labelColor: 'text-primary',
         actor: actorName,
+        actorSeat: currentAction.actor_seat,
         yaku: payload.yaku as [string, number][] | undefined,
         han: payload.han as number | undefined,
         fu: payload.fu as number | undefined,
@@ -286,6 +297,7 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
         label: 'ロン!',
         labelColor: 'text-red-400',
         actor: actorName,
+        actorSeat: currentAction.actor_seat,
         yaku: payload.yaku as [string, number][] | undefined,
         han: payload.han as number | undefined,
         fu: payload.fu as number | undefined,
@@ -302,6 +314,7 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
         label: '流局',
         labelColor: 'text-yellow-400',
         actor: null,
+        actorSeat: -1,
         tenpaiPlayers: tenpaiSeats && tenpaiSeats.length > 0
           ? tenpaiSeats.map(s => twins[s]?.name || seatNames[s]).join(' / ')
           : '全員ノーテン',
@@ -310,22 +323,31 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
     return null;
   }, [currentAction, twins, seatNames]);
 
-  // Reasoning display
-  const reasoning = currentReasoning;
-  const structured = reasoning?.structured_json;
-
   return (
     <div className="flex flex-col gap-2 sm:gap-3">
-      {/* Game info bar - stacks on mobile */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-4 py-1.5 sm:py-2 px-2.5 sm:px-4 bg-card rounded-lg border">
-        {/* Top row: round info */}
+      {/* ゲーム情報バー */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-4 py-2 px-3 sm:px-4 bg-card/80 backdrop-blur-sm rounded-xl border border-border/50">
         <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-          <span className="font-semibold text-base sm:text-lg">{state.round}</span>
+          <span className="font-bold text-base sm:text-lg text-gold">{state.round}</span>
           {state.honba > 0 && <span className="text-xs sm:text-sm text-muted-foreground">{state.honba}本場</span>}
           {state.kyotaku > 0 && (
             <span className="text-xs sm:text-sm text-yellow-400">供託{state.kyotaku}</span>
           )}
-          <span className="text-xs sm:text-sm text-muted-foreground">残り{state.remainingTiles}枚</span>
+
+          {/* 牌山残り（視覚的） */}
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-0.5">
+              <div className="w-3 h-4 bg-amber-50/80 border border-gray-400/30 rounded-[1px]" />
+              <div className="w-3 h-4 bg-amber-50/60 border border-gray-400/20 rounded-[1px] -ml-1" />
+              <div className="w-3 h-4 bg-amber-50/40 border border-gray-400/10 rounded-[1px] -ml-1" />
+            </div>
+            <span className="text-xs sm:text-sm font-medium">
+              残<span className={`ml-0.5 ${state.remainingTiles <= 10 ? 'text-red-400 font-bold' : 'text-muted-foreground'}`}>
+                {state.remainingTiles}
+              </span>枚
+            </span>
+          </div>
+
           {state.doraIndicators.length > 0 && (
             <div className="flex items-center gap-1">
               <span className="text-[10px] sm:text-xs text-muted-foreground">ドラ:</span>
@@ -336,9 +358,8 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
           )}
         </div>
 
-        {/* Action text - separate line on mobile */}
         {actionText && (
-          <span className="text-xs sm:text-sm">
+          <span className="text-xs sm:text-sm font-medium">
             <span className={currentAction ? seatColors[currentAction.actor_seat] : ''}>
               {actionText}
             </span>
@@ -346,15 +367,28 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
         )}
       </div>
 
-      {/* Agari / Ryukyoku overlay */}
+      {/* 和了/流局オーバーレイ */}
       {agariInfo && (
-        <div className="bg-card border-2 border-primary rounded-lg p-3 sm:p-4 text-center animate-overlay-in">
-          <p className={`text-xl sm:text-2xl font-bold ${agariInfo.labelColor} mb-1`}>{agariInfo.label}</p>
+        <div className="bg-card/90 backdrop-blur-sm border-2 border-primary/50 rounded-xl p-4 sm:p-5 text-center animate-overlay-in">
+          {/* 和了プレイヤーのアバター */}
+          {agariInfo.actor && agariInfo.actorSeat >= 0 && (
+            <div className="flex justify-center mb-2">
+              <PlayerAvatar
+                avatarUrl={twins[agariInfo.actorSeat]?.avatar_url}
+                name={agariInfo.actor}
+                seatWind={seatNames[agariInfo.actorSeat]}
+                seatColor={seatColors[agariInfo.actorSeat]}
+                size="lg"
+                isActive
+              />
+            </div>
+          )}
+          <p className={`text-2xl sm:text-3xl font-black ${agariInfo.labelColor} mb-1`}>{agariInfo.label}</p>
           {agariInfo.actor && (
-            <p className="text-xs sm:text-sm text-muted-foreground mb-2">{agariInfo.actor}</p>
+            <p className="text-sm text-muted-foreground mb-2">{agariInfo.actor}</p>
           )}
           {'fromTile' in agariInfo && agariInfo.fromTile && (
-            <p className="text-[10px] sm:text-xs text-muted-foreground mb-2">
+            <p className="text-xs text-muted-foreground mb-2">
               ロン牌: {agariInfo.fromTile}
               {'fromPlayer' in agariInfo && agariInfo.fromPlayer && ` (${agariInfo.fromPlayer}から)`}
             </p>
@@ -365,112 +399,147 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
           {agariInfo.yaku && (
             <div className="flex flex-wrap justify-center gap-1.5 sm:gap-2 my-2">
               {agariInfo.yaku.map(([name, han], i) => (
-                <span key={i} className="text-xs sm:text-sm">
+                <span key={i} className="text-xs sm:text-sm bg-card/50 px-2 py-0.5 rounded">
                   {name} <span className={agariInfo.labelColor}>{han}翻</span>
                 </span>
               ))}
             </div>
           )}
           {agariInfo.han && (
-            <p className="text-base sm:text-lg font-semibold">
+            <p className="text-lg sm:text-xl font-bold">
               {agariInfo.han}翻{agariInfo.fu}符
             </p>
           )}
           {agariInfo.scoreLevel && (
-            <p className={`text-xs sm:text-sm font-semibold mt-1 ${agariInfo.labelColor}`}>{agariInfo.scoreLevel}</p>
+            <p className={`text-sm font-bold mt-1 ${agariInfo.labelColor}`}>{agariInfo.scoreLevel}</p>
           )}
         </div>
       )}
 
-      {/* Player grid - 1 column on mobile, 2 on desktop */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
-        {[0, 1, 2, 3].map((seat) => (
-          <PlayerSeat
-            key={seat}
-            twin={twins[seat]}
-            hand={state.players[seat].hand}
-            tsumo={state.players[seat].tsumo}
-            discards={state.players[seat].discards}
-            melds={state.players[seat].melds}
-            riichi={state.players[seat].riichi}
-            riichiDiscardIndex={state.players[seat].riichiDiscardIndex}
-            score={state.players[seat].score}
-            isCurrentActor={state.currentActor === seat}
-            seatName={seatNames[seat]}
-            seatColor={seatColors[seat]}
-            compact={isMobile}
-          />
-        ))}
-      </div>
-
-      {/* Integrated reasoning section */}
-      {reasoning && (
-        <div className="bg-card rounded-lg border p-2.5 sm:p-4 animate-fade-in">
-          <div className="flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2 flex-wrap">
-            <span className="text-xs sm:text-sm font-semibold text-muted-foreground">思考</span>
-            {currentAction && (
-              <span className={`text-xs sm:text-sm font-semibold ${seatColors[currentAction.actor_seat]}`}>
-                {twins[currentAction.actor_seat]?.name || seatNames[currentAction.actor_seat]}
+      {/* モバイル: プレイヤータブ */}
+      {isMobile && (
+        <div className="flex gap-1 bg-card/60 rounded-xl p-1 border border-border/30">
+          {[0, 1, 2, 3].map((seat) => (
+            <button
+              key={seat}
+              onClick={() => setActiveTab(seat)}
+              className={[
+                'flex-1 flex items-center justify-center gap-1.5 py-1.5 px-1 rounded-lg transition-all text-xs',
+                activeTab === seat
+                  ? 'bg-card border border-border shadow-sm'
+                  : 'hover:bg-card/50',
+                state.currentActor === seat ? 'ring-1 ring-primary/50' : '',
+              ].join(' ')}
+            >
+              <PlayerAvatar
+                avatarUrl={twins[seat]?.avatar_url}
+                name={twins[seat]?.name || '???'}
+                seatWind={seatNames[seat]}
+                seatColor={seatColors[seat]}
+                size="sm"
+                isActive={state.currentActor === seat}
+              />
+              <span className={`truncate ${seatColors[seat]} font-medium`}>
+                {twins[seat]?.name?.slice(0, 4) || '???'}
               </span>
-            )}
+            </button>
+          ))}
+        </div>
+      )}
 
-            {structured?.risk && (
-              <span className={`text-[10px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded ${
-                structured.risk === 'high' ? 'bg-red-500/20 text-red-400' :
-                structured.risk === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+      {/* プレイヤーグリッド */}
+      {isMobile ? (
+        /* モバイル: 選択中のプレイヤーのみ表示 */
+        <div className="animate-fade-in" key={activeTab}>
+          <PlayerSeat
+            twin={twins[activeTab]}
+            hand={state.players[activeTab].hand}
+            tsumo={state.players[activeTab].tsumo}
+            discards={state.players[activeTab].discards}
+            melds={state.players[activeTab].melds}
+            riichi={state.players[activeTab].riichi}
+            riichiDiscardIndex={state.players[activeTab].riichiDiscardIndex}
+            score={state.players[activeTab].score}
+            isCurrentActor={state.currentActor === activeTab}
+            seatName={seatNames[activeTab]}
+            seatColor={seatColors[activeTab]}
+            compact={false}
+            reasoning={currentAction?.actor_seat === activeTab ? currentReasoning : null}
+          />
+        </div>
+      ) : (
+        /* PC: 2x2 グリッド */
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
+          {[0, 1, 2, 3].map((seat) => (
+            <PlayerSeat
+              key={seat}
+              twin={twins[seat]}
+              hand={state.players[seat].hand}
+              tsumo={state.players[seat].tsumo}
+              discards={state.players[seat].discards}
+              melds={state.players[seat].melds}
+              riichi={state.players[seat].riichi}
+              riichiDiscardIndex={state.players[seat].riichiDiscardIndex}
+              score={state.players[seat].score}
+              isCurrentActor={state.currentActor === seat}
+              seatName={seatNames[seat]}
+              seatColor={seatColors[seat]}
+              reasoning={currentAction?.actor_seat === seat ? currentReasoning : null}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* PC版: 全体の思考パネル（現在のアクター以外の直近の思考もサマリ表示） */}
+      {!isMobile && currentReasoning && currentAction && (
+        <div className="bg-card/60 backdrop-blur-sm rounded-xl border border-border/30 p-3 animate-fade-in">
+          <div className="flex items-center gap-2 mb-1.5">
+            <PlayerAvatar
+              avatarUrl={twins[currentAction.actor_seat]?.avatar_url}
+              name={twins[currentAction.actor_seat]?.name || '???'}
+              seatWind={seatNames[currentAction.actor_seat]}
+              seatColor={seatColors[currentAction.actor_seat]}
+              size="sm"
+              isActive
+            />
+            <span className={`text-sm font-semibold ${seatColors[currentAction.actor_seat]}`}>
+              {twins[currentAction.actor_seat]?.name}の思考
+            </span>
+
+            {currentReasoning.structured_json?.risk && (
+              <span className={`text-[10px] px-1 py-0.5 rounded ${
+                currentReasoning.structured_json.risk === 'high' ? 'bg-red-500/20 text-red-400' :
+                currentReasoning.structured_json.risk === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
                 'bg-green-500/20 text-green-400'
               }`}>
-                {structured.risk === 'high' ? '危険'
-                  : structured.risk === 'medium' ? '注意' : '安全'}
+                {currentReasoning.structured_json.risk === 'high' ? '危険'
+                  : currentReasoning.structured_json.risk === 'medium' ? '注意' : '安全'}
               </span>
             )}
 
-            {structured?.mode && (
-              <span className={`text-[10px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded ${
-                structured.mode === 'push' ? 'bg-red-500/10 text-red-300' :
-                structured.mode === 'pull' ? 'bg-blue-500/10 text-blue-300' :
-                'bg-gray-500/10 text-gray-300'
-              }`}>
-                {structured.mode === 'push' ? '押し'
-                  : structured.mode === 'pull' ? '引き' : 'バランス'}
+            {currentReasoning.structured_json?.target_yaku?.map((yaku: string, i: number) => (
+              <span key={i} className="text-[10px] bg-primary/20 text-primary px-1 py-0.5 rounded">
+                {yaku}
               </span>
-            )}
-
-            {structured?.target_yaku && structured.target_yaku.length > 0 && (
-              <div className="flex gap-1 ml-auto">
-                {structured.target_yaku.map((yaku: string, i: number) => (
-                  <span
-                    key={i}
-                    className="text-[10px] sm:text-xs bg-primary/20 text-primary px-1 sm:px-1.5 py-0.5 rounded"
-                  >
-                    {yaku}
-                  </span>
-                ))}
-              </div>
-            )}
+            ))}
           </div>
 
-          <p className="text-xs sm:text-sm leading-relaxed">{reasoning.summary_text}</p>
+          <p className="text-sm leading-relaxed">{currentReasoning.summary_text}</p>
 
-          {structured?.candidates && structured.candidates.length > 0 && (
-            <div className="mt-1.5 sm:mt-2 flex flex-wrap gap-1.5 sm:gap-2">
-              {structured.candidates.map((candidate: any, i: number) => (
-                <span
-                  key={i}
-                  className="text-[10px] sm:text-xs p-1 sm:p-1.5 rounded bg-muted/50 inline-flex items-center gap-1"
-                >
-                  <span className="font-bold text-primary bg-primary/10 px-1 rounded">
-                    {candidate.tile}
-                  </span>
-                  <span className="text-muted-foreground">{candidate.reason_short}</span>
+          {currentReasoning.structured_json?.candidates?.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {currentReasoning.structured_json.candidates.map((c: any, i: number) => (
+                <span key={i} className="text-xs p-1.5 rounded bg-muted/30 inline-flex items-center gap-1">
+                  <span className="font-bold text-primary bg-primary/10 px-1 rounded">{c.tile}</span>
+                  <span className="text-muted-foreground">{c.reason_short}</span>
                 </span>
               ))}
             </div>
           )}
 
-          {reasoning.detail_text && (
-            <div className="mt-1.5 sm:mt-2 p-1.5 sm:p-2 bg-muted/50 rounded text-[10px] sm:text-xs leading-relaxed whitespace-pre-wrap border-l-2 border-primary/30">
-              {reasoning.detail_text}
+          {currentReasoning.detail_text && (
+            <div className="mt-2 p-2 bg-muted/20 rounded text-xs leading-relaxed whitespace-pre-wrap border-l-2 border-primary/30 text-muted-foreground max-h-32 overflow-y-auto">
+              {currentReasoning.detail_text}
             </div>
           )}
         </div>

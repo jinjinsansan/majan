@@ -22,7 +22,7 @@ export default async function GamesHistoryPage() {
 
   // Twin情報を取得（名前表示用）
   const allTwinIds = games?.flatMap(g => g.player_twin_ids || []) || [];
-  const uniqueTwinIds = [...new Set(allTwinIds)];
+  const uniqueTwinIds = Array.from(new Set(allTwinIds));
   
   const { data: twins } = await supabase
     .from('twins')

@@ -8,6 +8,7 @@ export interface Twin {
   is_public: boolean;
   is_npc: boolean;
   npc_type?: 'speed' | 'power' | 'defense';
+  avatar_url?: string;
   created_at: string;
 }
 
@@ -70,15 +71,16 @@ export interface HandResult {
 }
 
 // Action (1手ごと)
-export type ActionType = 
-  | 'draw' 
-  | 'discard' 
-  | 'chi' 
-  | 'pon' 
-  | 'kan' 
-  | 'riichi' 
-  | 'tsumo' 
-  | 'ron' 
+export type ActionType =
+  | 'deal'
+  | 'draw'
+  | 'discard'
+  | 'chi'
+  | 'pon'
+  | 'kan'
+  | 'riichi'
+  | 'tsumo'
+  | 'ron'
   | 'ryukyoku';
 
 export interface Action {

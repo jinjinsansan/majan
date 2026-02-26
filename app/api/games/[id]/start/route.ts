@@ -1293,7 +1293,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
               }, {
                 summary_text: `ツモ和了！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                 detail_text: `ツモ牌: ${tileToName(drawnTile)}\n役: ${yakuNames}\n${winResult.han}翻${winResult.fu}符\n${winResult.scoreLevel}`,
-                structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string, number]) => name) },
                 tokens_used: 0, model_name: 'engine',
               });
               handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
@@ -1337,7 +1337,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                     }, {
                       summary_text: `嶺上開花！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                       detail_text: null,
-                      structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                      structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string, number]) => name) },
                       tokens_used: 0, model_name: 'engine',
                     });
                     handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
@@ -1380,7 +1380,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                     }, {
                       summary_text: `嶺上開花！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                       detail_text: null,
-                      structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                      structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string, number]) => name) },
                       tokens_used: 0, model_name: 'engine',
                     });
                     handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
@@ -1467,7 +1467,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
               }, {
                 summary_text: `ロン！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                 detail_text: `ロン牌: ${tileToName(discardedTile)} (${twins[discarderSeat]?.name}から)\n役: ${yakuNames}\n${winResult.han}翻${winResult.fu}符`,
-                structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string, number]) => name) },
                 tokens_used: 0, model_name: 'engine',
               });
               handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };
@@ -1514,7 +1514,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
                         }, {
                           summary_text: `嶺上開花！${yakuNames} ${winResult.han}翻${winResult.fu}符`,
                           detail_text: null,
-                          structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string]) => name) },
+                          structured_json: { candidates: [], risk: 'low', mode: 'push', target_yaku: winResult.yaku.map(([name]: [string, number]) => name) },
                           tokens_used: 0, model_name: 'engine',
                         });
                         handResult = { type: 'agari', winResult, scoreChanges: winResult.scoreChanges, dealerRetains: winResult.winnerSeat === engine.getDealerSeat() };

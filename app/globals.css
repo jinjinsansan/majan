@@ -16,8 +16,8 @@
     --secondary-foreground: 222.2 47.4% 11.2%;
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 42 80% 55%;
+    --accent-foreground: 42 20% 10%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
@@ -27,25 +27,25 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 142.1 70.6% 45.3%;
-    --primary-foreground: 144.9 80.4% 10%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --background: 150 35% 5%;
+    --foreground: 120 5% 90%;
+    --card: 150 25% 8%;
+    --card-foreground: 120 5% 90%;
+    --popover: 150 25% 8%;
+    --popover-foreground: 120 5% 90%;
+    --primary: 142 70% 45%;
+    --primary-foreground: 144 80% 10%;
+    --secondary: 42 25% 14%;
+    --secondary-foreground: 42 15% 85%;
+    --muted: 150 15% 12%;
+    --muted-foreground: 120 8% 55%;
+    --accent: 42 65% 52%;
+    --accent-foreground: 42 30% 8%;
+    --destructive: 0 63% 31%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 142.1 76.2% 36.3%;
+    --border: 150 15% 16%;
+    --input: 150 15% 16%;
+    --ring: 142 70% 45%;
   }
 
   * {
@@ -58,6 +58,12 @@
 }
 
 @layer components {
+  /* 麻雀テーブルフェルト風背景 */
+  .mahjong-felt {
+    background: radial-gradient(ellipse at center, hsl(150 30% 12%) 0%, hsl(150 35% 5%) 100%);
+  }
+
+  /* 牌スタイル */
   .mahjong-tile {
     @apply w-8 h-12 bg-white border border-gray-300 rounded-sm shadow-sm flex items-center justify-center text-lg font-bold;
   }
@@ -70,6 +76,7 @@
     @apply ring-2 ring-yellow-400;
   }
 
+  /* ゲームオーバーレイ */
   .game-overlay {
     @apply fixed inset-0 bg-black/60 flex items-center justify-center z-50;
   }
@@ -78,8 +85,54 @@
     @apply bg-card p-8 rounded-xl text-center space-y-4;
   }
 
+  /* プレイバックバー */
   .playback-bar {
     @apply bg-card border-t p-4 flex items-center justify-between gap-4;
+  }
+
+  /* 吹き出し（思考バブル） */
+  .thought-bubble {
+    @apply relative bg-card/95 backdrop-blur-sm border rounded-xl p-3;
+  }
+
+  .thought-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 24px;
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 8px solid hsl(var(--border));
+  }
+
+  .thought-bubble::before {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 25px;
+    width: 0;
+    height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 7px solid hsl(var(--card));
+    z-index: 1;
+  }
+
+  /* プレイヤーアバター */
+  .avatar-glow {
+    box-shadow: 0 0 12px 2px hsl(var(--primary) / 0.3);
+  }
+
+  /* ゴールドアクセントボーダー */
+  .border-gold {
+    border-color: hsl(42 65% 52%);
+  }
+
+  /* 麻雀タイルデコレーション */
+  .tile-pattern {
+    background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2322c55e' fill-opacity='0.04'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
   }
 }
 
@@ -94,6 +147,26 @@
 
   .animate-overlay-in {
     animation: overlayIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-bubble-in {
+    animation: bubbleIn 0.4s ease-out;
+  }
+
+  .animate-glow-pulse {
+    animation: glowPulse 2s ease-in-out infinite;
+  }
+
+  .text-gold {
+    color: hsl(42 65% 52%);
+  }
+
+  .bg-felt {
+    background: radial-gradient(ellipse at center, hsl(150 30% 12%) 0%, hsl(150 35% 5%) 100%);
   }
 }
 
@@ -134,5 +207,40 @@
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bubbleIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) translateY(8px);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.02) translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes glowPulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px hsl(142 70% 45% / 0.2);
+  }
+  50% {
+    box-shadow: 0 0 16px 4px hsl(142 70% 45% / 0.4);
   }
 }

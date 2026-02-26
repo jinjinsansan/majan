@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,7 +28,7 @@ const PLAY_STYLES = [
 ];
 
 const FAVORITE_YAKU = [
-  'タンヤオ', 'ピンフ', '三色同順', '一盃口', '混一色', 
+  'タンヤオ', 'ピンフ', '三色同順', '一盃口', '混一色',
   '清一色', 'リーチ', '七対子', 'チャンタ', '一気通貫',
   '役牌', 'ホンイツ', 'トイトイ', '対々和'
 ];
@@ -48,7 +49,7 @@ export default function NewTwinPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Form state
   const [name, setName] = useState('');
   const [personalities, setPersonalities] = useState<string[]>([]);
@@ -60,9 +61,14 @@ export default function NewTwinPage() {
   const [isPublic, setIsPublic] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
+  // Avatar state
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [generatingAvatar, setGeneratingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+
   const togglePersonality = (id: string) => {
-    setPersonalities(prev => 
-      prev.includes(id) 
+    setPersonalities(prev =>
+      prev.includes(id)
         ? prev.filter(p => p !== id)
         : [...prev, id]
     );
@@ -81,13 +87,13 @@ export default function NewTwinPage() {
       .map(p => PERSONALITY_TAGS.find(t => t.id === p)?.label)
       .filter(Boolean)
       .join('、');
-    
+
     const styleText = PLAY_STYLES.find(s => s.id === playStyle)?.label || '';
     const styleDesc = PLAY_STYLES.find(s => s.id === playStyle)?.desc || '';
-    
+
     const riichiText = RIICHI_TIMING.find(r => r.id === riichiTiming)?.desc || '';
     const nakiText = NAKI_TENDENCY.find(n => n.id === nakiTendency)?.desc || '';
-    
+
     return `あなたは「${name}」という麻雀AIです。
 
 【性格】
@@ -109,18 +115,18 @@ ${freePrompt || '特になし'}
   };
 
   const generateStyleParams = () => {
-    const aggression = playStyle === 'power' ? 85 
+    const aggression = playStyle === 'power' ? 85
       : playStyle === 'push' ? 90
       : playStyle === 'speed' ? 70
       : playStyle === 'defense' ? 25
       : 50;
-    
+
     const defense = playStyle === 'defense' ? 95
       : playStyle === 'push' ? 20
       : playStyle === 'power' ? 30
       : playStyle === 'speed' ? 40
       : 50;
-    
+
     const nakiValue = nakiTendency === 'high' ? 85
       : nakiTendency === 'low' ? 20
       : 50;
@@ -133,14 +139,59 @@ ${freePrompt || '特になし'}
     };
   };
 
+  // アバター生成
+  const generateAvatar = async () => {
+    if (!name.trim()) {
+      setAvatarError('先にTwin名を入力してください');
+      return;
+    }
+
+    setGeneratingAvatar(true);
+    setAvatarError(null);
+
+    try {
+      const personalityText = personalities
+        .map(p => PERSONALITY_TAGS.find(t => t.id === p)?.label)
+        .filter(Boolean)
+        .join(', ');
+
+      const styleText = PLAY_STYLES.find(s => s.id === playStyle)?.label || '';
+
+      const avatarPrompt = [
+        `Mahjong player character named "${name}".`,
+        personalityText && `Personality: ${personalityText}.`,
+        styleText && `Play style: ${styleText}.`,
+        freePrompt && `Additional: ${freePrompt.slice(0, 200)}`,
+      ].filter(Boolean).join(' ');
+
+      const response = await fetch('/api/twins/avatar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: avatarPrompt, twinName: name }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'アバター生成に失敗しました');
+      }
+
+      setAvatarUrl(result.url);
+    } catch (err: any) {
+      setAvatarError(err.message || 'アバター生成に失敗しました');
+    } finally {
+      setGeneratingAvatar(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!name.trim()) {
       setError('Twin名を入力してください');
       return;
     }
-    
+
     if (freePrompt.length < 500) {
       setError('自由プロンプトは500文字以上入力してください');
       return;
@@ -151,7 +202,7 @@ ${freePrompt || '特になし'}
 
     try {
       const supabase = createClient();
-      
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('ログインしてください');
 
@@ -163,6 +214,7 @@ ${freePrompt || '特になし'}
           persona_prompt: generatePersonaPrompt(),
           style_params: generateStyleParams(),
           is_public: isPublic,
+          avatar_url: avatarUrl,
         });
 
       if (insertError) throw insertError;
@@ -177,217 +229,258 @@ ${freePrompt || '特になし'}
   };
 
   return (
-    <main className="container mx-auto p-6 max-w-3xl">
-      <div className="mb-6">
-        <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
-          ← ダッシュボードに戻る
-        </Link>
-      </div>
+    <main className="min-h-screen bg-felt tile-pattern">
+      <div className="container mx-auto p-4 sm:p-6 max-w-3xl">
+        <div className="mb-6">
+          <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
+            ← ダッシュボードに戻る
+          </Link>
+        </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-2xl">🎭 新しいTwinを作成</CardTitle>
-          <CardDescription>
-            あなただけのAI雀士を作成しましょう。性格や打ち筋を設定すると、
-            そのキャラクターが対局で自動的にプレイします。
-          </CardDescription>
-        </CardHeader>
+        <Card className="bg-card/80 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="text-xl sm:text-2xl">
+              <span className="text-gold">🎭</span> 新しいTwinを作成
+            </CardTitle>
+            <CardDescription>
+              あなただけのAI雀士を作成しましょう。アバター画像もAIで生成できます。
+            </CardDescription>
+          </CardHeader>
 
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-6">
-            {error && (
-              <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
-                {error}
-              </div>
-            )}
-
-            {/* Twin Name */}
-            <div className="space-y-2">
-              <Label htmlFor="name">Twin名 *</Label>
-              <Input
-                id="name"
-                placeholder="例: 速攻太郎、慎重花子"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={20}
-                required
-              />
-            </div>
-
-            {/* Personality Tags */}
-            <div className="space-y-2">
-              <Label>性格タグ（複数選択可）</Label>
-              <div className="flex flex-wrap gap-2">
-                {PERSONALITY_TAGS.map((tag) => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => togglePersonality(tag.id)}
-                    className={`px-3 py-2 rounded-md border text-sm transition-colors ${
-                      personalities.includes(tag.id)
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background hover:bg-accent'
-                    }`}
-                  >
-                    {tag.emoji} {tag.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Play Style */}
-            <div className="space-y-2">
-              <Label>打ち筋</Label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {PLAY_STYLES.map((style) => (
-                  <button
-                    key={style.id}
-                    type="button"
-                    onClick={() => setPlayStyle(style.id)}
-                    className={`p-3 rounded-md border text-left transition-colors ${
-                      playStyle === style.id
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background hover:bg-accent'
-                    }`}
-                  >
-                    <div className="font-medium text-sm">{style.label}</div>
-                    <div className="text-xs opacity-70">{style.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Favorite Yaku */}
-            <div className="space-y-2">
-              <Label>好きな役（複数選択可）</Label>
-              <div className="flex flex-wrap gap-2">
-                {FAVORITE_YAKU.map((yaku) => (
-                  <button
-                    key={yaku}
-                    type="button"
-                    onClick={() => toggleYaku(yaku)}
-                    className={`px-3 py-1 rounded-md border text-sm transition-colors ${
-                      favoriteYaku.includes(yaku)
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background hover:bg-accent'
-                    }`}
-                  >
-                    {yaku}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Riichi Timing */}
-            <div className="space-y-2">
-              <Label>リーチ判断</Label>
-              <div className="flex gap-2">
-                {RIICHI_TIMING.map((timing) => (
-                  <button
-                    key={timing.id}
-                    type="button"
-                    onClick={() => setRiichiTiming(timing.id)}
-                    className={`flex-1 p-3 rounded-md border text-center transition-colors ${
-                      riichiTiming === timing.id
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background hover:bg-accent'
-                    }`}
-                  >
-                    <div className="font-medium text-sm">{timing.label}</div>
-                    <div className="text-xs opacity-70">{timing.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Naki Tendency */}
-            <div className="space-y-2">
-              <Label>鳴き判断</Label>
-              <div className="flex gap-2">
-                {NAKI_TENDENCY.map((tendency) => (
-                  <button
-                    key={tendency.id}
-                    type="button"
-                    onClick={() => setNakiTendency(tendency.id)}
-                    className={`flex-1 p-3 rounded-md border text-center transition-colors ${
-                      nakiTendency === tendency.id
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background hover:bg-accent'
-                    }`}
-                  >
-                    <div className="font-medium text-sm">{tendency.label}</div>
-                    <div className="text-xs opacity-70">{tendency.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Free Prompt */}
-            <div className="space-y-2">
-              <Label htmlFor="freePrompt">
-                自由プロンプト * <span className="text-muted-foreground text-xs">(500〜3000文字)</span>
-              </Label>
-              <Textarea
-                id="freePrompt"
-                placeholder="このTwinの詳しい性格、思考パターン、口癖、好きなこと嫌いなことなどを自由に記述してください。詳しく書くほどキャラが立ちます。"
-                value={freePrompt}
-                onChange={(e) => setFreePrompt(e.target.value)}
-                rows={6}
-                minLength={500}
-                maxLength={3000}
-                required
-              />
-              <p className="text-xs text-muted-foreground text-right">
-                {freePrompt.length} / 3000
-              </p>
-            </div>
-
-            {/* Persona Prompt Preview */}
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => setShowPreview(prev => !prev)}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {showPreview ? '▼' : '▶'} プレビューを{showPreview ? '非表示' : '表示'}
-              </button>
-              {showPreview && (
-                <div className="bg-muted rounded-md p-4">
-                  <p className="text-xs text-muted-foreground mb-2">
-                    保存時に生成される persona_prompt:
-                  </p>
-                  <pre className="text-sm whitespace-pre-wrap break-words">
-                    {generatePersonaPrompt()}
-                  </pre>
+          <form onSubmit={handleSubmit}>
+            <CardContent className="space-y-6">
+              {error && (
+                <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+                  {error}
                 </div>
               )}
-            </div>
 
-            {/* Public Setting */}
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="isPublic"
-                checked={isPublic}
-                onChange={(e) => setIsPublic(e.target.checked)}
-                className="w-4 h-4"
-              />
-              <Label htmlFor="isPublic" className="cursor-pointer">
-                このTwinを公開する（他のユーザーが対局に招待できます）
-              </Label>
-            </div>
-          </CardContent>
+              {/* Twin名 + アバター */}
+              <div className="flex gap-4 items-start">
+                {/* アバタープレビュー */}
+                <div className="flex flex-col items-center gap-2 flex-shrink-0">
+                  <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden border-2 border-border bg-muted flex items-center justify-center">
+                    {avatarUrl ? (
+                      <Image
+                        src={avatarUrl}
+                        alt="Avatar preview"
+                        width={96}
+                        height={96}
+                        className="w-full h-full object-cover"
+                        unoptimized
+                      />
+                    ) : (
+                      <span className="text-2xl sm:text-3xl text-muted-foreground">
+                        {name ? name.charAt(0) : '?'}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={generateAvatar}
+                    disabled={generatingAvatar}
+                    className="text-xs whitespace-nowrap"
+                  >
+                    {generatingAvatar ? '生成中...' : avatarUrl ? '再生成' : 'アバター生成'}
+                  </Button>
+                  {avatarError && (
+                    <p className="text-xs text-destructive text-center">{avatarError}</p>
+                  )}
+                </div>
 
-          <CardFooter className="flex gap-4">
-            <Button type="submit" disabled={loading} className="flex-1">
-              {loading ? '作成中...' : 'Twinを作成'}
-            </Button>
-            <Link href="/dashboard">
-              <Button type="button" variant="outline">キャンセル</Button>
-            </Link>
-          </CardFooter>
-        </form>
-      </Card>
+                {/* Twin名入力 */}
+                <div className="flex-1 space-y-2">
+                  <Label htmlFor="name">Twin名 *</Label>
+                  <Input
+                    id="name"
+                    placeholder="例: 速攻太郎、慎重花子"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    maxLength={20}
+                    required
+                    className="bg-background/50"
+                  />
+                </div>
+              </div>
+
+              {/* 性格タグ */}
+              <div className="space-y-2">
+                <Label>性格タグ（複数選択可）</Label>
+                <div className="flex flex-wrap gap-2">
+                  {PERSONALITY_TAGS.map((tag) => (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => togglePersonality(tag.id)}
+                      className={`px-3 py-2 rounded-lg border text-sm transition-all ${
+                        personalities.includes(tag.id)
+                          ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                          : 'bg-background/50 hover:bg-accent/10 border-border/50'
+                      }`}
+                    >
+                      {tag.emoji} {tag.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 打ち筋 */}
+              <div className="space-y-2">
+                <Label>打ち筋</Label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {PLAY_STYLES.map((style) => (
+                    <button
+                      key={style.id}
+                      type="button"
+                      onClick={() => setPlayStyle(style.id)}
+                      className={`p-3 rounded-lg border text-left transition-all ${
+                        playStyle === style.id
+                          ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                          : 'bg-background/50 hover:bg-accent/10 border-border/50'
+                      }`}
+                    >
+                      <div className="font-medium text-sm">{style.label}</div>
+                      <div className="text-xs opacity-70">{style.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 好きな役 */}
+              <div className="space-y-2">
+                <Label>好きな役（複数選択可）</Label>
+                <div className="flex flex-wrap gap-2">
+                  {FAVORITE_YAKU.map((yaku) => (
+                    <button
+                      key={yaku}
+                      type="button"
+                      onClick={() => toggleYaku(yaku)}
+                      className={`px-3 py-1 rounded-lg border text-sm transition-all ${
+                        favoriteYaku.includes(yaku)
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background/50 hover:bg-accent/10 border-border/50'
+                      }`}
+                    >
+                      {yaku}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* リーチ判断 */}
+              <div className="space-y-2">
+                <Label>リーチ判断</Label>
+                <div className="flex gap-2">
+                  {RIICHI_TIMING.map((timing) => (
+                    <button
+                      key={timing.id}
+                      type="button"
+                      onClick={() => setRiichiTiming(timing.id)}
+                      className={`flex-1 p-3 rounded-lg border text-center transition-all ${
+                        riichiTiming === timing.id
+                          ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                          : 'bg-background/50 hover:bg-accent/10 border-border/50'
+                      }`}
+                    >
+                      <div className="font-medium text-sm">{timing.label}</div>
+                      <div className="text-xs opacity-70">{timing.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 鳴き判断 */}
+              <div className="space-y-2">
+                <Label>鳴き判断</Label>
+                <div className="flex gap-2">
+                  {NAKI_TENDENCY.map((tendency) => (
+                    <button
+                      key={tendency.id}
+                      type="button"
+                      onClick={() => setNakiTendency(tendency.id)}
+                      className={`flex-1 p-3 rounded-lg border text-center transition-all ${
+                        nakiTendency === tendency.id
+                          ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                          : 'bg-background/50 hover:bg-accent/10 border-border/50'
+                      }`}
+                    >
+                      <div className="font-medium text-sm">{tendency.label}</div>
+                      <div className="text-xs opacity-70">{tendency.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 自由プロンプト */}
+              <div className="space-y-2">
+                <Label htmlFor="freePrompt">
+                  自由プロンプト * <span className="text-muted-foreground text-xs">(500〜3000文字)</span>
+                </Label>
+                <Textarea
+                  id="freePrompt"
+                  placeholder="このTwinの詳しい性格、思考パターン、口癖、好きなこと嫌いなことなどを自由に記述してください。詳しく書くほどキャラが立ちます。"
+                  value={freePrompt}
+                  onChange={(e) => setFreePrompt(e.target.value)}
+                  rows={6}
+                  minLength={500}
+                  maxLength={3000}
+                  required
+                  className="bg-background/50"
+                />
+                <p className="text-xs text-muted-foreground text-right">
+                  {freePrompt.length} / 3000
+                </p>
+              </div>
+
+              {/* プレビュー */}
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPreview(prev => !prev)}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showPreview ? '▼' : '▶'} プレビューを{showPreview ? '非表示' : '表示'}
+                </button>
+                {showPreview && (
+                  <div className="bg-muted/30 rounded-lg p-4 border border-border/30">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      保存時に生成される persona_prompt:
+                    </p>
+                    <pre className="text-sm whitespace-pre-wrap break-words">
+                      {generatePersonaPrompt()}
+                    </pre>
+                  </div>
+                )}
+              </div>
+
+              {/* 公開設定 */}
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="isPublic"
+                  checked={isPublic}
+                  onChange={(e) => setIsPublic(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                <Label htmlFor="isPublic" className="cursor-pointer">
+                  このTwinを公開する（他のユーザーが対局に招待できます）
+                </Label>
+              </div>
+            </CardContent>
+
+            <CardFooter className="flex gap-4">
+              <Button type="submit" disabled={loading} className="flex-1">
+                {loading ? '作成中...' : 'Twinを作成'}
+              </Button>
+              <Link href="/dashboard">
+                <Button type="button" variant="outline">キャンセル</Button>
+              </Link>
+            </CardFooter>
+          </form>
+        </Card>
+      </div>
     </main>
   );
 }
