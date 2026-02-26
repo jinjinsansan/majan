@@ -145,7 +145,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
 
         const currentState = engine.getState();
         const currentSeat = currentState.currentActor;
-        const twin = orderedTwins[currentSeat];
+        const twin = twins[currentSeat];
 
         // === ツモフェーズ ===
         if (currentState.phase === 'draw') {
@@ -578,7 +578,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             const daiminkanCandidates = engine.getDaiminkanCandidates(discardedTile, discarderSeat);
             if (daiminkanCandidates.length > 0) {
               for (const kanSeat of daiminkanCandidates) {
-                const kanTwin = orderedTwins[kanSeat];
+                const kanTwin = twins[kanSeat];
                 // 大明槓の判断: naki_tendencyに基づく
                 const nakiTendency = kanTwin?.style_params?.naki_tendency ?? 50;
                 const shouldKan = Math.random() * 100 < nakiTendency;
@@ -660,7 +660,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             const ponCandidates = !called ? engine.getPonCandidates(discardedTile, discarderSeat) : [];
             if (ponCandidates.length > 0) {
               for (const ponSeat of ponCandidates) {
-                const ponTwin = orderedTwins[ponSeat];
+                const ponTwin = twins[ponSeat];
                 let shouldPon = false;
 
                 if (useLLM && ponTwin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
@@ -731,7 +731,7 @@ async function runGame(gameId: string, twins: Twin[], supabase: any) {
             if (!called) {
               const nextSeat = (discarderSeat + 1) % 4;
               if (engine.canChi(nextSeat, discardedTile)) {
-                const chiTwin = orderedTwins[nextSeat];
+                const chiTwin = twins[nextSeat];
                 let shouldChi = false;
 
                 if (useLLM && chiTwin && totalTokensUsed < MAX_TOKENS_PER_GAME) {
