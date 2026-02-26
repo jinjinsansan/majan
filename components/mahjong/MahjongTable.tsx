@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { PlayerSeat } from './PlayerSeat';
 import { MahjongTile } from './MahjongTile';
 import { tileToDisplay } from './tile-utils';
@@ -49,7 +49,6 @@ function reconstructState(actions: Action[]) {
 
     switch (action.action_type) {
       case 'deal':
-        // 新しい局が始まったかチェック
         if (action.hand_id !== currentHandId) {
           if (currentHandId !== null) {
             for (let i = 0; i < 4; i++) {
@@ -103,7 +102,6 @@ function reconstructState(actions: Action[]) {
 
       case 'riichi':
         players[seat].riichi = true;
-        // リーチ宣言牌は次の打牌のインデックス（現在の捨て牌数）
         players[seat].riichiDiscardIndex = players[seat].discards.length;
         players[seat].score -= 1000;
         kyotaku++;
@@ -157,20 +155,17 @@ function reconstructState(actions: Action[]) {
 
       case 'kan':
         if (payload.kan_type === 'ankan') {
-          // 暗槓: 手牌から4枚取り出して副露に
           if (payload.tiles) {
             players[seat].melds.push({ type: 'ankan', tiles: payload.tiles });
             for (const t of payload.tiles) {
               const idx = players[seat].hand.indexOf(t);
               if (idx >= 0) players[seat].hand.splice(idx, 1);
             }
-            // ツモ牌からも除外
             if (players[seat].tsumo && payload.tiles.includes(players[seat].tsumo!)) {
               players[seat].tsumo = undefined;
             }
           }
         } else if (payload.kan_type === 'kakan') {
-          // 加槓: 既存ポンに1枚追加
           const ponMeldIdx = players[seat].melds.findIndex(
             m => m.type === 'pon' && m.tiles.some(t => t.replace(/0/, '5') === (payload.tile || '').replace(/0/, '5'))
           );
@@ -180,7 +175,6 @@ function reconstructState(actions: Action[]) {
               tiles: [...players[seat].melds[ponMeldIdx].tiles, payload.tile!],
             };
           }
-          // 手牌/ツモから除外
           if (players[seat].tsumo === payload.tile) {
             players[seat].tsumo = undefined;
           } else {
@@ -188,17 +182,14 @@ function reconstructState(actions: Action[]) {
             if (idx >= 0) players[seat].hand.splice(idx, 1);
           }
         } else if (payload.kan_type === 'daiminkan') {
-          // 大明槓: 他家の捨て牌+手牌3枚
           if (payload.tiles) {
             players[seat].melds.push({ type: 'kan', tiles: payload.tiles });
-            // 手牌から3枚除外（鳴いた牌除く）
             const calledTile = payload.tile || payload.tiles[0];
             const handTiles = payload.tiles.filter(t => t !== calledTile);
             for (const t of handTiles) {
               const idx = players[seat].hand.indexOf(t);
               if (idx >= 0) players[seat].hand.splice(idx, 1);
             }
-            // 捨て牌から除外
             if (payload.from_seat !== undefined) {
               const fromDiscards = players[payload.from_seat].discards;
               if (fromDiscards.length > 0) fromDiscards.pop();
@@ -223,10 +214,22 @@ function reconstructState(actions: Action[]) {
   return { players, currentActor, round, honba, kyotaku, remainingTiles, doraIndicators, dealerSeat };
 }
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+  return isMobile;
+}
+
 export function MahjongTable({ twins, actions, currentAction, currentReasoning, highlightTiles = [] }: MahjongTableProps) {
   const state = useMemo(() => reconstructState(actions), [actions]);
   const seatNames = ['東', '南', '西', '北'];
   const seatColors = ['text-red-400', 'text-blue-400', 'text-green-400', 'text-yellow-400'];
+  const isMobile = useIsMobile();
 
   // Build action description text
   const actionText = useMemo(() => {
@@ -312,75 +315,75 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
   const structured = reasoning?.structured_json;
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Game info bar */}
-      <div className="flex items-center justify-center gap-4 flex-wrap py-2 px-4 bg-card rounded-lg border">
-        <span className="font-semibold text-lg">{state.round}</span>
-        {state.honba > 0 && <span className="text-sm text-muted-foreground">{state.honba}本場</span>}
-        {state.kyotaku > 0 && (
-          <span className="text-sm text-yellow-400">供託{state.kyotaku}</span>
-        )}
-        <span className="text-sm text-muted-foreground">残り{state.remainingTiles}枚</span>
-        {state.doraIndicators.length > 0 && (
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground">ドラ:</span>
-            {state.doraIndicators.map((tile, i) => (
-              <MahjongTile key={i} tile={tile} size="sm" />
-            ))}
-          </div>
-        )}
+    <div className="flex flex-col gap-2 sm:gap-3">
+      {/* Game info bar - stacks on mobile */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-4 py-1.5 sm:py-2 px-2.5 sm:px-4 bg-card rounded-lg border">
+        {/* Top row: round info */}
+        <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+          <span className="font-semibold text-base sm:text-lg">{state.round}</span>
+          {state.honba > 0 && <span className="text-xs sm:text-sm text-muted-foreground">{state.honba}本場</span>}
+          {state.kyotaku > 0 && (
+            <span className="text-xs sm:text-sm text-yellow-400">供託{state.kyotaku}</span>
+          )}
+          <span className="text-xs sm:text-sm text-muted-foreground">残り{state.remainingTiles}枚</span>
+          {state.doraIndicators.length > 0 && (
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] sm:text-xs text-muted-foreground">ドラ:</span>
+              {state.doraIndicators.map((tile, i) => (
+                <MahjongTile key={i} tile={tile} size="sm" />
+              ))}
+            </div>
+          )}
+        </div>
 
-        {/* Current action description */}
+        {/* Action text - separate line on mobile */}
         {actionText && (
-          <>
-            <span className="text-muted-foreground">|</span>
-            <span className="text-sm">
-              <span className={currentAction ? seatColors[currentAction.actor_seat] : ''}>
-                {actionText}
-              </span>
+          <span className="text-xs sm:text-sm">
+            <span className={currentAction ? seatColors[currentAction.actor_seat] : ''}>
+              {actionText}
             </span>
-          </>
+          </span>
         )}
       </div>
 
       {/* Agari / Ryukyoku overlay */}
       {agariInfo && (
-        <div className="bg-card border-2 border-primary rounded-lg p-4 text-center animate-overlay-in">
-          <p className={`text-2xl font-bold ${agariInfo.labelColor} mb-1`}>{agariInfo.label}</p>
+        <div className="bg-card border-2 border-primary rounded-lg p-3 sm:p-4 text-center animate-overlay-in">
+          <p className={`text-xl sm:text-2xl font-bold ${agariInfo.labelColor} mb-1`}>{agariInfo.label}</p>
           {agariInfo.actor && (
-            <p className="text-sm text-muted-foreground mb-2">{agariInfo.actor}</p>
+            <p className="text-xs sm:text-sm text-muted-foreground mb-2">{agariInfo.actor}</p>
           )}
           {'fromTile' in agariInfo && agariInfo.fromTile && (
-            <p className="text-xs text-muted-foreground mb-2">
+            <p className="text-[10px] sm:text-xs text-muted-foreground mb-2">
               ロン牌: {agariInfo.fromTile}
               {'fromPlayer' in agariInfo && agariInfo.fromPlayer && ` (${agariInfo.fromPlayer}から)`}
             </p>
           )}
           {'tenpaiPlayers' in agariInfo && (
-            <p className="text-sm mt-1">テンパイ: {agariInfo.tenpaiPlayers}</p>
+            <p className="text-xs sm:text-sm mt-1">テンパイ: {agariInfo.tenpaiPlayers}</p>
           )}
           {agariInfo.yaku && (
-            <div className="flex flex-wrap justify-center gap-2 my-2">
+            <div className="flex flex-wrap justify-center gap-1.5 sm:gap-2 my-2">
               {agariInfo.yaku.map(([name, han], i) => (
-                <span key={i} className="text-sm">
+                <span key={i} className="text-xs sm:text-sm">
                   {name} <span className={agariInfo.labelColor}>{han}翻</span>
                 </span>
               ))}
             </div>
           )}
           {agariInfo.han && (
-            <p className="text-lg font-semibold">
+            <p className="text-base sm:text-lg font-semibold">
               {agariInfo.han}翻{agariInfo.fu}符
             </p>
           )}
           {agariInfo.scoreLevel && (
-            <p className={`text-sm font-semibold mt-1 ${agariInfo.labelColor}`}>{agariInfo.scoreLevel}</p>
+            <p className={`text-xs sm:text-sm font-semibold mt-1 ${agariInfo.labelColor}`}>{agariInfo.scoreLevel}</p>
           )}
         </div>
       )}
 
-      {/* 2x2 Player grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {/* Player grid - 1 column on mobile, 2 on desktop */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
         {[0, 1, 2, 3].map((seat) => (
           <PlayerSeat
             key={seat}
@@ -395,23 +398,24 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
             isCurrentActor={state.currentActor === seat}
             seatName={seatNames[seat]}
             seatColor={seatColors[seat]}
+            compact={isMobile}
           />
         ))}
       </div>
 
       {/* Integrated reasoning section */}
       {reasoning && (
-        <div className="bg-card rounded-lg border p-4 animate-fade-in">
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <span className="text-sm font-semibold text-muted-foreground">思考</span>
+        <div className="bg-card rounded-lg border p-2.5 sm:p-4 animate-fade-in">
+          <div className="flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2 flex-wrap">
+            <span className="text-xs sm:text-sm font-semibold text-muted-foreground">思考</span>
             {currentAction && (
-              <span className={`text-sm font-semibold ${seatColors[currentAction.actor_seat]}`}>
+              <span className={`text-xs sm:text-sm font-semibold ${seatColors[currentAction.actor_seat]}`}>
                 {twins[currentAction.actor_seat]?.name || seatNames[currentAction.actor_seat]}
               </span>
             )}
 
             {structured?.risk && (
-              <span className={`text-xs px-1.5 py-0.5 rounded ${
+              <span className={`text-[10px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded ${
                 structured.risk === 'high' ? 'bg-red-500/20 text-red-400' :
                 structured.risk === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
                 'bg-green-500/20 text-green-400'
@@ -422,7 +426,7 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
             )}
 
             {structured?.mode && (
-              <span className={`text-xs px-1.5 py-0.5 rounded ${
+              <span className={`text-[10px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded ${
                 structured.mode === 'push' ? 'bg-red-500/10 text-red-300' :
                 structured.mode === 'pull' ? 'bg-blue-500/10 text-blue-300' :
                 'bg-gray-500/10 text-gray-300'
@@ -434,10 +438,10 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
 
             {structured?.target_yaku && structured.target_yaku.length > 0 && (
               <div className="flex gap-1 ml-auto">
-                {structured.target_yaku.map((yaku, i) => (
+                {structured.target_yaku.map((yaku: string, i: number) => (
                   <span
                     key={i}
-                    className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded"
+                    className="text-[10px] sm:text-xs bg-primary/20 text-primary px-1 sm:px-1.5 py-0.5 rounded"
                   >
                     {yaku}
                   </span>
@@ -446,14 +450,14 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
             )}
           </div>
 
-          <p className="text-sm leading-relaxed">{reasoning.summary_text}</p>
+          <p className="text-xs sm:text-sm leading-relaxed">{reasoning.summary_text}</p>
 
           {structured?.candidates && structured.candidates.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {structured.candidates.map((candidate, i) => (
+            <div className="mt-1.5 sm:mt-2 flex flex-wrap gap-1.5 sm:gap-2">
+              {structured.candidates.map((candidate: any, i: number) => (
                 <span
                   key={i}
-                  className="text-xs p-1.5 rounded bg-muted/50 inline-flex items-center gap-1.5"
+                  className="text-[10px] sm:text-xs p-1 sm:p-1.5 rounded bg-muted/50 inline-flex items-center gap-1"
                 >
                   <span className="font-bold text-primary bg-primary/10 px-1 rounded">
                     {candidate.tile}
@@ -465,7 +469,7 @@ export function MahjongTable({ twins, actions, currentAction, currentReasoning, 
           )}
 
           {reasoning.detail_text && (
-            <div className="mt-2 p-2 bg-muted/50 rounded text-xs leading-relaxed whitespace-pre-wrap border-l-2 border-primary/30">
+            <div className="mt-1.5 sm:mt-2 p-1.5 sm:p-2 bg-muted/50 rounded text-[10px] sm:text-xs leading-relaxed whitespace-pre-wrap border-l-2 border-primary/30">
               {reasoning.detail_text}
             </div>
           )}

@@ -297,16 +297,16 @@ export default function GamePage() {
   if (game.status === 'queued') {
     return (
       <main className="min-h-screen flex flex-col">
-        <header className="border-b p-4">
+        <header className="border-b p-2 sm:p-4">
           <div className="container mx-auto">
-            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
+            <Link href="/dashboard" className="text-xs sm:text-sm text-muted-foreground hover:text-foreground">
               ← ダッシュボード
             </Link>
-            <h1 className="text-xl font-semibold mt-1">対局準備中</h1>
+            <h1 className="text-lg sm:text-xl font-semibold mt-1">対局準備中</h1>
           </div>
         </header>
-        <div className="flex-1 flex items-center justify-center">
-          <Card className="max-w-md text-center p-8">
+        <div className="flex-1 flex items-center justify-center p-4">
+          <Card className="max-w-md w-full text-center p-4 sm:p-8">
             <CardHeader>
               <CardTitle>対局準備完了</CardTitle>
             </CardHeader>
@@ -348,10 +348,10 @@ export default function GamePage() {
   return (
     <main className="min-h-screen flex flex-col">
       {/* Compact header */}
-      <header className="border-b px-4 py-2">
+      <header className="border-b px-2 sm:px-4 py-1.5 sm:py-2">
         <div className="container mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link href="/dashboard" className="text-xs sm:text-sm text-muted-foreground hover:text-foreground">
               ← 戻る
             </Link>
             {game.status === 'running' && (
@@ -390,7 +390,7 @@ export default function GamePage() {
       </header>
 
       {/* MahjongTable - full width with integrated reasoning */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-1.5 sm:p-4">
         <div className="container mx-auto max-w-4xl">
           <MahjongTable
             twins={twins}

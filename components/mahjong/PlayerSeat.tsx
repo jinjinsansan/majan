@@ -17,6 +17,7 @@ interface PlayerSeatProps {
   isCurrentActor: boolean;
   seatName: string;
   seatColor: string;
+  compact?: boolean;
 }
 
 export function PlayerSeat({
@@ -31,32 +32,37 @@ export function PlayerSeat({
   isCurrentActor,
   seatName,
   seatColor,
+  compact = false,
 }: PlayerSeatProps) {
+  const tileSize = compact ? 'sm' : 'sm' as const;
+  const handTileSize = compact ? 'sm' : 'md' as const;
+
   return (
     <div
       className={[
-        'bg-card rounded-lg border p-3 flex flex-col gap-2 transition-all duration-200',
+        'bg-card rounded-lg border flex flex-col gap-1.5 sm:gap-2 transition-all duration-200',
+        'p-2 sm:p-3',
         isCurrentActor ? 'ring-2 ring-primary shadow-lg' : '',
       ].join(' ')}
     >
       {/* Header: seat wind, name, score, riichi badge */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className={`font-bold text-base ${seatColor}`}>{seatName}</span>
-        <span className="text-sm truncate max-w-[120px]">{twin?.name || '???'}</span>
-        <span className="text-sm text-muted-foreground ml-auto">{score.toLocaleString()}点</span>
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        <span className={`font-bold text-sm sm:text-base ${seatColor}`}>{seatName}</span>
+        <span className="text-xs sm:text-sm truncate flex-1 min-w-0">{twin?.name || '???'}</span>
+        <span className="text-xs sm:text-sm text-muted-foreground whitespace-nowrap">{score.toLocaleString()}点</span>
         {riichi && (
-          <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded animate-pulse">
+          <span className="text-[10px] sm:text-xs bg-red-500/20 text-red-400 px-1 sm:px-1.5 py-0.5 rounded animate-pulse">
             立直
           </span>
         )}
       </div>
 
       {/* Melds */}
-      {melds.length > 0 && <MeldTiles melds={melds} />}
+      {melds.length > 0 && <MeldTiles melds={melds} tileSize={tileSize} />}
 
       {/* Hand tiles + tsumo */}
-      <div className="min-h-[2.75rem]">
-        <HandTiles tiles={hand} tsumo={tsumo} />
+      <div className="min-h-[2rem] sm:min-h-[2.75rem] overflow-x-auto">
+        <HandTiles tiles={hand} tsumo={tsumo} tileSize={handTileSize} />
       </div>
 
       {/* Discard pile (compact) */}
@@ -66,6 +72,7 @@ export function PlayerSeat({
           <DiscardPile
             discards={discards}
             riichiIndex={riichiDiscardIndex}
+            tileSize={tileSize}
           />
         </div>
       )}

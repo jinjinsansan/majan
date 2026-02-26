@@ -4,6 +4,7 @@ import { MahjongTile } from './MahjongTile';
 
 interface MeldTilesProps {
   melds: { type: string; tiles: string[] }[];
+  tileSize?: 'sm' | 'md' | 'lg';
 }
 
 const meldLabels: Record<string, string> = {
@@ -14,7 +15,7 @@ const meldLabels: Record<string, string> = {
   kakan: '\u52A0\u69D3',
 };
 
-export function MeldTiles({ melds }: MeldTilesProps) {
+export function MeldTiles({ melds, tileSize = 'sm' }: MeldTilesProps) {
   if (melds.length === 0) return null;
 
   return (
@@ -31,7 +32,7 @@ export function MeldTiles({ melds }: MeldTilesProps) {
             <MahjongTile
               key={`meld-${mi}-${tile}-${ti}`}
               tile={tile}
-              size="sm"
+              size={tileSize}
             />
           ))}
         </div>

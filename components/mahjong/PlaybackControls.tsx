@@ -99,127 +99,133 @@ export function PlaybackControls({
   };
 
   return (
-    <div className="border-t bg-card p-3">
-      <div className="container mx-auto flex flex-wrap items-center gap-3">
-        {/* 再生コントロール */}
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={onPrev}
-            disabled={currentIndex === 0}
-            title="1手戻る"
-          >
-            ◀
-          </Button>
-
-          {isPlaying ? (
+    <div className="border-t bg-card p-2 sm:p-3">
+      <div className="container mx-auto flex flex-col gap-2 sm:gap-0 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+        {/* Row 1 (mobile): Play controls + speed + seek bar */}
+        <div className="flex items-center gap-2 w-full sm:w-auto sm:contents">
+          {/* 再生コントロール */}
+          <div className="flex items-center gap-1 flex-shrink-0">
             <Button
-              variant="default"
+              variant="outline"
               size="icon"
               className="h-8 w-8"
-              onClick={onPause}
-              title="停止"
+              onClick={onPrev}
+              disabled={currentIndex === 0}
+              title="1手戻る"
             >
-              ⏸
+              ◀
             </Button>
-          ) : (
+
+            {isPlaying ? (
+              <Button
+                variant="default"
+                size="icon"
+                className="h-8 w-8"
+                onClick={onPause}
+                title="停止"
+              >
+                ⏸
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                size="icon"
+                className="h-8 w-8"
+                onClick={onPlay}
+                disabled={currentIndex >= totalActions - 1}
+                title="再生"
+              >
+                ▶
+              </Button>
+            )}
+
             <Button
-              variant="default"
+              variant="outline"
               size="icon"
               className="h-8 w-8"
-              onClick={onPlay}
+              onClick={onNext}
               disabled={currentIndex >= totalActions - 1}
-              title="再生"
+              title="1手進む"
             >
-              ▶
-            </Button>
-          )}
-
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={onNext}
-            disabled={currentIndex >= totalActions - 1}
-            title="1手進む"
-          >
-            ▶|
-          </Button>
-        </div>
-
-        {/* 速度 */}
-        <div className="flex items-center gap-0.5">
-          {speeds.map((speed) => (
-            <Button
-              key={speed}
-              variant={playbackSpeed === speed ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => onSpeedChange(speed)}
-              className="h-7 min-w-[2.5rem] px-1 text-xs"
-            >
-              {speed}x
-            </Button>
-          ))}
-        </div>
-
-        {/* シークバー */}
-        <div className="flex-1 flex items-center gap-2 min-w-[150px]">
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, totalActions - 1)}
-            value={currentIndex}
-            onChange={(e) => onSeek(parseInt(e.target.value))}
-            className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer"
-          />
-          <span className="text-xs text-muted-foreground whitespace-nowrap">
-            {currentIndex + 1}/{totalActions}
-          </span>
-        </div>
-
-        {/* 局ジャンプ */}
-        <div className="flex items-center gap-0.5">
-          <span className="text-xs text-muted-foreground mr-1">局:</span>
-          {handStartIndices.map((hand, i) => (
-            <Button
-              key={hand.handId}
-              variant={currentHand === i ? 'default' : 'ghost'}
-              size="sm"
-              className="text-xs h-7 px-2"
-              onClick={() => onSeek(hand.index)}
-            >
-              {hand.label}
-            </Button>
-          ))}
-        </div>
-
-        {/* 重要局面ジャンプ */}
-        {keyMoments.length > 0 && (
-          <div className="flex items-center gap-0.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs h-7 px-2"
-              onClick={jumpToPrevKeyMoment}
-              disabled={!keyMoments.some(m => m.index < currentIndex)}
-              title="前の重要局面"
-            >
-              ◀重要
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs h-7 px-2"
-              onClick={jumpToNextKeyMoment}
-              disabled={!keyMoments.some(m => m.index > currentIndex)}
-              title="次の重要局面"
-            >
-              重要▶
+              ▶|
             </Button>
           </div>
-        )}
+
+          {/* 速度 */}
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            {speeds.map((speed) => (
+              <Button
+                key={speed}
+                variant={playbackSpeed === speed ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => onSpeedChange(speed)}
+                className="h-7 min-w-[2rem] sm:min-w-[2.5rem] px-1 text-[10px] sm:text-xs"
+              >
+                {speed}x
+              </Button>
+            ))}
+          </div>
+
+          {/* シークバー */}
+          <div className="flex-1 flex items-center gap-1.5 sm:gap-2 min-w-0">
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, totalActions - 1)}
+              value={currentIndex}
+              onChange={(e) => onSeek(parseInt(e.target.value))}
+              className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer min-w-[60px]"
+            />
+            <span className="text-[10px] sm:text-xs text-muted-foreground whitespace-nowrap">
+              {currentIndex + 1}/{totalActions}
+            </span>
+          </div>
+        </div>
+
+        {/* Row 2 (mobile): Hand jump + key moments */}
+        <div className="flex items-center gap-2 w-full sm:w-auto sm:contents">
+          {/* 局ジャンプ */}
+          <div className="flex items-center gap-0.5">
+            <span className="text-[10px] sm:text-xs text-muted-foreground mr-0.5 sm:mr-1">局:</span>
+            {handStartIndices.map((hand, i) => (
+              <Button
+                key={hand.handId}
+                variant={currentHand === i ? 'default' : 'ghost'}
+                size="sm"
+                className="text-[10px] sm:text-xs h-6 sm:h-7 px-1.5 sm:px-2"
+                onClick={() => onSeek(hand.index)}
+              >
+                {hand.label}
+              </Button>
+            ))}
+          </div>
+
+          {/* 重要局面ジャンプ */}
+          {keyMoments.length > 0 && (
+            <div className="flex items-center gap-0.5 ml-auto sm:ml-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-[10px] sm:text-xs h-6 sm:h-7 px-1.5 sm:px-2"
+                onClick={jumpToPrevKeyMoment}
+                disabled={!keyMoments.some(m => m.index < currentIndex)}
+                title="前の重要局面"
+              >
+                ◀重要
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-[10px] sm:text-xs h-6 sm:h-7 px-1.5 sm:px-2"
+                onClick={jumpToNextKeyMoment}
+                disabled={!keyMoments.some(m => m.index > currentIndex)}
+                title="次の重要局面"
+              >
+                重要▶
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
