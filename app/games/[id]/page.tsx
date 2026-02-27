@@ -99,15 +99,35 @@ export default function GamePage() {
 
   // After loading, auto-enter replay/latest mode
   useEffect(() => {
-    if (!loading && game && viewMode === null) {
-      if (game.status === 'finished' || game.status === 'running') {
-        if (actions.length > 0) {
-          setViewMode('replay');
-          setCurrentActionIndex(0);
-          setIsPlaying(false);
-        } else {
-          setViewMode('latest');
+    if (!loading && game) {
+      const hasActions = actions.length > 0;
+
+      if (viewMode === null) {
+        if (game.status === 'finished' || game.status === 'running') {
+          if (hasActions) {
+            // 配牌をスキップして最初の打牌から表示（全員の手牌が見える位置）
+            const firstMeaningfulIndex = actions.findIndex(
+              a => a.action_type !== 'deal' && a.action_type !== 'draw'
+            );
+            const startIndex = firstMeaningfulIndex >= 0 ? firstMeaningfulIndex : 0;
+            setViewMode('replay');
+            setCurrentActionIndex(startIndex);
+            setIsPlaying(true);
+          } else {
+            setViewMode('latest');
+          }
         }
+      }
+
+      // actionsがあとから読み込まれた場合のフォールバック
+      if (viewMode === 'latest' && game.status === 'finished' && hasActions) {
+        const firstMeaningfulIndex = actions.findIndex(
+          a => a.action_type !== 'deal' && a.action_type !== 'draw'
+        );
+        const startIndex = firstMeaningfulIndex >= 0 ? firstMeaningfulIndex : 0;
+        setViewMode('replay');
+        setCurrentActionIndex(startIndex);
+        setIsPlaying(true);
       }
     }
   }, [loading, game, viewMode, actions.length]);
